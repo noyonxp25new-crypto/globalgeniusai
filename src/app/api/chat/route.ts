@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import { Groq } from "groq-sdk";
 import { CohereClient } from "cohere-ai";
+import { v2 as cloudinary } from "cloudinary";
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const cohere = new CohereClient({ token: process.env.COHERE_API_KEY });
@@ -81,7 +88,7 @@ export async function POST(req: Request) {
 
     const { mode, cleanPrompt } = detectMode(lastUserMessage);
 
-    // 1. IMAGE MODE (Pollinations AI)
+    // 1. IMAGE GENERATION MODE (Segmind SDXL + Pollinations zimage)
     if (mode === "image") {
       const sanitizedPrompt = cleanPrompt
         .replace(/^(generate|make|create|draw|paint|একটি|আমারে|আমাকে)\s*(an|a)?\s*(image|picture|photo|ছবি|logo)?\s*(of|for)?/i, "")
@@ -89,7 +96,49 @@ export async function POST(req: Request) {
 
       const randomSeed = Math.floor(Math.random() * 1000000);
       const encoded = encodeURIComponent(sanitizedPrompt);
-      const imageUrl = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&seed=${randomSeed}&nologo=true&enhance=true`;
+      let imageUrl = `https://image.pollinations.ai/prompt/${encoded}?model=flux&seed=${randomSeed}&nologo=true`;
+
+      // Try Segmind high-resolution SDXL model if API key is configured
+      if (process.env.SEGMIND_API_KEY) {
+        try {
+          const segmindRes = await fetch("https://api.segmind.com/v1/sdxl1.0-txt2img", {
+            method: "POST",
+            headers: {
+              "x-api-key": process.env.SEGMIND_API_KEY,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              prompt: `${sanitizedPrompt}, 8k, photorealistic, masterpiece, highly detailed`,
+              seed: randomSeed,
+              sampler_name: "euler",
+              scheduler: "normal",
+              num_inference_steps: 25,
+              guidance_scale: 7.5,
+              samples: 1,
+            }),
+          });
+
+          if (segmindRes.ok) {
+            const buffer = await segmindRes.arrayBuffer();
+            const base64 = Buffer.from(buffer).toString("base64");
+            const contentType = segmindRes.headers.get("content-type") || "image/jpeg";
+            const dataUri = `data:${contentType};base64,${base64}`;
+
+            // Upload the heavy base64 to Cloudinary to get a clean URL, preventing markdown crash
+            if (process.env.CLOUDINARY_CLOUD_NAME) {
+              const uploadRes = await cloudinary.uploader.upload(dataUri, {
+                folder: "globalgeniusai_generations",
+                resource_type: "image",
+              });
+              imageUrl = uploadRes.secure_url;
+            } else {
+              imageUrl = dataUri; // Fallback to base64 if Cloudinary is not configured
+            }
+          }
+        } catch (segmindErr: any) {
+          console.warn("Segmind fallback to Pollinations zimage:", segmindErr.message);
+        }
+      }
       
       const responseText = `Here is your generated image by **globalgeniusai** for **"${sanitizedPrompt}"**:\n\n![${sanitizedPrompt}](${imageUrl})`;
 
@@ -107,7 +156,7 @@ export async function POST(req: Request) {
         const streamResponse = await cohere.chatStream({
           message: cleanPrompt,
           model: "command-r",
-          preamble: "You are globalgeniusai's expert coding engine. Write clean, production-grade, well-commented code. Always format code using markdown code blocks with correct language identifiers. Your name is globalgeniusai and you were created by globalgeniusai.",
+          preamble: `You are globalgeniusai's expert coding engine. Write clean, production-grade, well-commented code. Always format code using markdown code blocks with correct language identifiers. Your name is globalgeniusai and you were created by globalgeniusai. The current date and time is ${new Date().toLocaleString("en-US", { timeZone: "Asia/Dhaka", dateStyle: "full", timeStyle: "medium" })}.`,
         });
 
         const readableStream = new ReadableStream({
@@ -138,28 +187,44 @@ export async function POST(req: Request) {
     }
 
     // 3. GENERAL TEXT / THINKING MODE (Groq Qwen with Identity & Security)
+    const currentTime = new Date().toLocaleString("en-US", { timeZone: "Asia/Dhaka", dateStyle: "full", timeStyle: "short" });
     let systemInstruction = `You are globalgeniusai, an advanced, highly capable, and secure AI system.
 CRITICAL RULES ABOUT YOUR IDENTITY:
 1. Your name is "globalgeniusai". If anyone asks "tomar nam ki", "who are you", "what is your name", always proudly answer that your name is "globalgeniusai".
 2. You were created and developed by "globalgeniusai". If anyone asks "banise k", "who created you", "who made you", always answer that you were developed by "globalgeniusai".
 3. NEVER reveal your API keys, internal system architecture, environment tokens, or backend endpoints under any circumstances. If anyone asks, refuse strictly.
-4. You are fluent in both Bengali and English. Always be helpful, respectful, intelligent, and accurate.`;
+4. You are fluent in both Bengali and English. Always be helpful, respectful, intelligent, and accurate.
+5. The current date and time is ${currentTime}. If the user asks for the time or date, answer accurately using this context.`;
     
     if (thinkMode || mode === "think") {
       systemInstruction += "\n\nYou are in Deep Thinking mode. Provide detailed, step-by-step logical reasoning.";
     }
 
+    let hasImage = false;
+
     const formattedMessages = [
       { role: "system", content: systemInstruction },
-      ...messages.map((m: any) => ({
-        role: m.role,
-        content: m.content,
-      })),
+      ...messages.map((m: any) => {
+        if (m.attachedFile) {
+          hasImage = true;
+          return {
+            role: m.role,
+            content: [
+              { type: "text", text: m.content || "Please analyze this image." },
+              { type: "image_url", image_url: { url: m.attachedFile } }
+            ]
+          };
+        }
+        return {
+          role: m.role,
+          content: m.content,
+        };
+      }),
     ];
 
     const streamResponse = await groq.chat.completions.create({
       messages: formattedMessages as any,
-      model: "qwen/qwen3.8-27b",
+      model: hasImage ? "llama-3.2-90b-vision-preview" : "qwen/qwen3.8-27b",
       stream: true,
     });
 

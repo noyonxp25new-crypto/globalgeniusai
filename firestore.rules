@@ -1,0 +1,89 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helper Functions ──────────────────────────────────────────────────────
+
+    // Check if request is from an authenticated user
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Check if the requesting user owns this resource
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Check if the requesting user has admin role in Firestore
+    function isAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
+    }
+
+    // Check if requesting user is the root admin by email
+    function isRootAdmin() {
+      return isSignedIn() && request.auth.token.email == "noyonxp25@gmail.com";
+    }
+
+    // Check if user is banned
+    function isNotBanned() {
+      return !exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isBanned != true;
+    }
+
+    // ─── users/{uid} ──────────────────────────────────────────────────────────
+    // Master user collection: profile, tier, credits, ban status
+    match /users/{uid} {
+      // User can read their own profile; admins can read anyone
+      allow read: if isOwner(uid) || isAdmin() || isRootAdmin();
+
+      // User can only update safe fields (displayName, photoURL, lastActive)
+      // Admins can update any field
+      allow update: if isAdmin() || isRootAdmin() ||
+        (isOwner(uid) && isNotBanned() &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(["role", "tier", "isBanned", "credits", "uid", "email"]));
+
+      // Only admins can create/delete user docs
+      allow create: if isAdmin() || isRootAdmin() || isOwner(uid);
+      allow delete: if isAdmin() || isRootAdmin();
+
+      // ── users/{uid}/dailyUsage/{date} ────────────────────────────────────
+      // Per-day usage counters, written by the user themselves
+      match /dailyUsage/{date} {
+        allow read: if isOwner(uid) || isAdmin() || isRootAdmin();
+        allow write: if isOwner(uid) && isNotBanned();
+      }
+    }
+
+    // ─── chats/{chatId} ───────────────────────────────────────────────────────
+    // Chat history stored in a flat collection. Users can only read/write their own chats.
+    match /chats/{chatId} {
+      allow read: if isSignedIn() && isNotBanned() && resource.data.userId == request.auth.uid;
+      allow update, delete: if isSignedIn() && isNotBanned() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isNotBanned() && request.resource.data.userId == request.auth.uid;
+    }
+
+    // ─── settings/global_config ───────────────────────────────────────────────
+    // Global app settings: any signed-in user can read, only admins can write
+    match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin() || isRootAdmin();
+    }
+
+    // ─── admin_logs/{logId} ───────────────────────────────────────────────────
+    // Audit trail: admins can read, only server (service account) can write
+    // Service account writes via Admin SDK / REST API, not client-side
+    match /admin_logs/{logId} {
+      allow read: if isAdmin() || isRootAdmin();
+      allow write: if false; // Server-side only via Admin SDK
+    }
+
+    // ─── Deny everything else ─────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
