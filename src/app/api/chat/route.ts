@@ -40,7 +40,7 @@ function checkSecurityViolation(message: string): boolean {
   return bannedKeywords.some((keyword) => lower.includes(keyword));
 }
 
-function detectMode(message: string): { mode: "image" | "code" | "think" | "search" | "audio" | "text"; cleanPrompt: string } {
+function detectMode(message: string): { mode: "image" | "code" | "think" | "search" | "research" | "audio" | "text"; cleanPrompt: string } {
   const trimmed = message.trim();
   const lower = trimmed.toLowerCase();
 
@@ -57,6 +57,10 @@ function detectMode(message: string): { mode: "image" | "code" | "think" | "sear
     const cleanPrompt = trimmed.replace(/^\/think\s*/i, "").trim();
     return { mode: "think", cleanPrompt };
   }
+  if (lower.startsWith("/research ") || lower === "/research" || lower.startsWith("/deep ") || lower === "/deep") {
+    const cleanPrompt = trimmed.replace(/^\/(research|deep)\s*/i, "").trim();
+    return { mode: "research", cleanPrompt };
+  }
   if (lower.startsWith("/search ") || lower === "/search") {
     const cleanPrompt = trimmed.replace(/^\/search\s*/i, "").trim();
     return { mode: "search", cleanPrompt };
@@ -68,16 +72,29 @@ function detectMode(message: string): { mode: "image" | "code" | "think" | "sear
   }
 
   // Automatic detection
-  if (lower.match(/\b(image|picture|photo|draw|wallpaper|logo|ছবি|আঁক|generate image|make image|create image|draw a|make a photo)\b/)) {
+  // We avoid \b for Bengali words because JavaScript \b only works with ASCII.
+  if (
+    /\b(image|picture|photo|draw|wallpaper|logo|generate image|make image|create image|draw a|make a photo)\b/i.test(lower) ||
+    /(ছবি|আঁকা|আঁক|ছবি তৈরি|ছবি বানাও)/.test(lower)
+  ) {
     return { mode: "image", cleanPrompt: trimmed };
   }
-  if (lower.match(/\b(code|script|function|program|algorithm|কোড|write code|coding|create app|component|html|css|python|javascript|react)\b/)) {
+  if (
+    /\b(code|script|function|program|algorithm|write code|coding|create app|component|html|css|python|javascript|react)\b/i.test(lower) ||
+    /(কোড|স্ক্রিপ্ট|প্রোগ্রাম|অ্যালগরিদম)/.test(lower)
+  ) {
     return { mode: "code", cleanPrompt: trimmed };
   }
-  if (lower.match(/\b(search|google|find on web|search the web|internet|খুঁজে বের কর|সার্চ কর)\b/)) {
+  if (
+    /\b(search|google|find on web|search the web|internet)\b/i.test(lower) ||
+    /(খুঁজুন|সার্চ|ওয়েব|ইন্টারনেট|খুঁজে বের কর)/.test(lower)
+  ) {
     return { mode: "search", cleanPrompt: trimmed };
   }
-  if (lower.match(/\b(audio|music|mp3|গান|গান শোনাও|song|sing|voice|অডিও)\b/)) {
+  if (
+    /\b(audio|music|mp3|song|sing|voice)\b/i.test(lower) ||
+    /(গান|অডিও|মিউজিক|গাও|শোনাও)/.test(lower)
+  ) {
     return { mode: "audio", cleanPrompt: trimmed };
   }
 
@@ -103,14 +120,118 @@ export async function POST(req: Request) {
 
     const { mode, cleanPrompt } = detectMode(lastUserMessage);
 
-    // 1. IMAGE GENERATION MODE (Segmind SDXL + Pollinations zimage)
+    // 0. CUSTOM GEMINI/GEMMA API PROXY
+      // The user wants to use Gemini 2.5 Flash / Gemma 4 31b IT via a custom API key
+      const CUSTOM_API_URL = process.env.CUSTOM_AI_BASE_URL || "https://openrouter.ai/api/v1/chat/completions";
+      const CUSTOM_API_KEY = process.env.CUSTOM_AI_API_KEY;
+      
+      // If the prompt explicitly mentions one of these models, route to the custom API
+      if (CUSTOM_API_KEY && (lastUserMessage.toLowerCase().includes("gemini") || lastUserMessage.toLowerCase().includes("gemma"))) {
+        
+        // Extract exact model name if specified, otherwise default to a known good one
+        let selectedModel = "google/gemini-flash-1.5"; // OpenRouter default ID for gemini flash
+        if (lastUserMessage.toLowerCase().includes("gemma")) {
+          selectedModel = "google/gemma-2-27b-it";
+        }
+
+        const formattedCustomMessages = messages.map((m: any) => {
+          if (m.attachedFile) {
+            return {
+              role: m.role,
+              content: [
+                { type: "text", text: m.content || "Analyze this image." },
+                { type: "image_url", image_url: { url: m.attachedFile } }
+              ]
+            };
+          }
+          return { role: m.role, content: m.content };
+        });
+
+        try {
+          const customRes = await fetch(CUSTOM_API_URL, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${CUSTOM_API_KEY}`,
+              "Content-Type": "application/json",
+              "HTTP-Referer": "https://globalgeniusai.com",
+              "X-Title": "globalgeniusai"
+            },
+            body: JSON.stringify({
+              model: selectedModel,
+              messages: formattedCustomMessages,
+              stream: true,
+            })
+          });
+
+          if (customRes.ok) {
+            // Stream the response back like Groq
+            const readableStream = new ReadableStream({
+              async start(controller) {
+                const reader = customRes.body?.getReader();
+                if (!reader) return controller.close();
+                const decoder = new TextDecoder();
+                try {
+                  while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n').filter(line => line.trim() !== '');
+                    for (const line of lines) {
+                      if (line === 'data: [DONE]') continue;
+                      if (line.startsWith('data: ')) {
+                        try {
+                          const data = JSON.parse(line.slice(6));
+                          const content = data.choices?.[0]?.delta?.content || '';
+                          if (content) {
+                            controller.enqueue(new TextEncoder().encode(content));
+                          }
+                        } catch (e) {}
+                      }
+                    }
+                  }
+                } finally {
+                  controller.close();
+                }
+              }
+            });
+
+            return new Response(readableStream, {
+              headers: {
+                "Content-Type": "text/plain; charset=utf-8",
+                "Cache-Control": "no-cache",
+              },
+            });
+          }
+        } catch (err) {
+          console.error("Custom API failed:", err);
+          // Fall back to groq if it fails
+        }
+      }
+
+      // 1. IMAGE GENERATION MODE (Segmind SDXL + Pollinations zimage)
     if (mode === "image") {
       const sanitizedPrompt = cleanPrompt
-        .replace(/^(generate|make|create|draw|paint|একটি|আমারে|আমাকে)\s*(an|a)?\s*(image|picture|photo|ছবি|logo)?\s*(of|for)?/i, "")
+        .replace(/^(generate|make|create|draw|paint|ছবি বানাও|ছবি তৈরি কর|ছবি তৈরি করো)\s*(an|a)?\s*(image|picture|photo|ছবি|logo)?\s*(of|for)?/i, "")
         .trim() || cleanPrompt;
 
+      let englishPrompt = sanitizedPrompt;
+      try {
+        const translationRes = await groq.chat.completions.create({
+          messages: [
+            { role: "system", content: "You are an expert prompt translator. Translate the given text (which may be in Bengali, Banglish, or English) into a highly descriptive, visually rich English prompt optimized for AI image generation. Output ONLY the English text, nothing else." },
+            { role: "user", content: sanitizedPrompt }
+          ],
+          model: "llama3-8b-8192",
+          temperature: 0.3,
+          max_tokens: 150,
+        });
+        englishPrompt = translationRes.choices[0]?.message?.content?.trim() || sanitizedPrompt;
+      } catch (e) {
+        console.error("Translation failed:", e);
+      }
+
       const randomSeed = Math.floor(Math.random() * 1000000);
-      const encoded = encodeURIComponent(sanitizedPrompt);
+      const encoded = encodeURIComponent(englishPrompt);
       let imageUrl = `https://image.pollinations.ai/prompt/${encoded}?model=flux&seed=${randomSeed}&nologo=true`;
 
       // Try Segmind high-resolution SDXL model if API key is configured
@@ -123,7 +244,7 @@ export async function POST(req: Request) {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              prompt: `${sanitizedPrompt}, 8k, photorealistic, masterpiece, highly detailed`,
+              prompt: `${englishPrompt}, 8k, photorealistic, masterpiece, highly detailed`,
               seed: randomSeed,
               sampler_name: "euler",
               scheduler: "normal",
@@ -155,7 +276,7 @@ export async function POST(req: Request) {
         }
       }
       
-      const responseText = `Here is your generated image by **globalgeniusai** for **"${sanitizedPrompt}"**:\n\n![${sanitizedPrompt}](${imageUrl})`;
+      const responseText = `Here is your generated image by **globalgeniusai** for **"${sanitizedPrompt}"**:\n\n![${englishPrompt}](${imageUrl})`;
 
       return new Response(responseText, {
         headers: {
@@ -276,6 +397,88 @@ ${searchContext}
         });
       } catch (err: any) {
         console.warn("Tavily search error fallback:", err?.message);
+      }
+    }
+
+    
+    // 3.5. DEEP RESEARCH MODE (Tavily Advanced Search + Groq Report Generation)
+    if (mode === "research" && process.env.TAVILY_API_KEY) {
+      try {
+        const tavilyRes = await fetch("https://api.tavily.com/search", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            api_key: process.env.TAVILY_API_KEY,
+            query: cleanPrompt || "latest developments in AI",
+            search_depth: "advanced",
+            include_answer: true,
+            include_images: false,
+            max_results: 10,
+          }),
+        });
+
+        let searchContext = "";
+        let directAnswer = "";
+        if (tavilyRes.ok) {
+          const data = await tavilyRes.json();
+          const results = data.results || [];
+          directAnswer = data.answer || "";
+          searchContext = results.map((r: any, i: number) => `[${i + 1}] Title: ${r.title}\nURL: ${r.url}\nContent: ${r.content}`).join("\n\n");
+        } else {
+          console.warn("Tavily API returned an error:", await tavilyRes.text());
+        }
+
+        const currentTime = new Date().toLocaleString("en-US", { timeZone: "Asia/Dhaka", dateStyle: "full", timeStyle: "short" });
+        const systemInstruction = `You are globalgeniusai, an expert analyst and researcher.
+Your task is to provide a highly detailed, comprehensive Deep Research Report based ONLY on the provided Web Search Results.
+IMPORTANT RULES:
+1. Write a structured report using Markdown (Headers like ## Introduction, ## Key Findings, ## Analysis, ## Conclusion).
+2. Use bullet points and paragraphs to make the report easy to read.
+3. Answer in Bengali (বাংলা) by default, unless the user explicitly asks for another language.
+4. Synthesize the information logically. Do NOT include direct URLs or links in the output.
+5. If the search results do not contain enough information, explain what is known and what is missing.
+The current date and time is ${currentTime}.
+
+--- WEB SEARCH RESULTS ---
+${directAnswer ? "Tavily AI Summary:\n" + directAnswer + "\n\n" : ""}
+${searchContext}
+--------------------------`;
+
+        const streamResponse = await groq.chat.completions.create({
+          messages: [
+            { role: "system", content: systemInstruction },
+            { role: "user", content: cleanPrompt || "Generate a deep research report." }
+          ],
+          model: "qwen/qwen3.8-27b",
+          stream: true,
+        });
+
+        const stream = new ReadableStream({
+          async start(controller) {
+            try {
+              for await (const chunk of streamResponse) {
+                const text = chunk.choices[0]?.delta?.content || "";
+                if (text) {
+                  controller.enqueue(new TextEncoder().encode(text));
+                }
+              }
+              controller.close();
+            } catch (err) {
+              controller.error(err);
+            }
+          },
+        });
+
+        return new Response(stream, {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Transfer-Encoding": "chunked",
+          },
+        });
+      } catch (err: any) {
+        console.warn("Deep research error fallback:", err?.message);
       }
     }
 

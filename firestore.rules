@@ -57,6 +57,13 @@ service cloud.firestore {
         allow read: if isOwner(uid) || isAdmin() || isRootAdmin();
         allow write: if isOwner(uid) && isNotBanned();
       }
+
+      // ── users/{uid}/projects/{projectId} ────────────────────────────────────
+      // User created projects/folders
+      match /projects/{projectId} {
+        allow read: if isOwner(uid) || isAdmin() || isRootAdmin();
+        allow write: if isOwner(uid) && isNotBanned();
+      }
     }
 
     // ─── chats/{chatId} ───────────────────────────────────────────────────────

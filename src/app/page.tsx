@@ -11,7 +11,7 @@ import {
   Image as ImageIcon,
   Code,
   Volume2,
-  VolumeX,
+  VolumeX, ChevronDown, Book, GitBranch, LayoutGrid, Menu, FileText, Filter, Tag, Music,
   Copy,
   Check,
   ThumbsUp,
@@ -23,6 +23,7 @@ import {
   Paperclip,
   Search,
   Settings,
+  Camera,
   Trash2,
   Edit3,
   Brain,
@@ -54,7 +55,8 @@ import {
   Crown,
   AlertCircle,
   Pin,
-  PinOff
+  PinOff,
+  Link2
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -102,6 +104,26 @@ type Conversation = {
   messages: Message[];
   updatedAt: number;
   isPinned?: boolean;
+  isPrivate?: boolean;
+  projectId?: string;
+};
+
+type LibraryFile = {
+  id: string;
+  name: string;
+  type: "image" | "document" | "code" | "audio";
+  url: string;
+  sizeStr: string;
+  timestamp: number;
+  convId: string;
+};
+
+type Project = {
+  id: string;
+  name: string;
+  color: string;
+  icon: string;
+  createdAt: number;
 };
 
 type UserProfile = {
@@ -131,6 +153,14 @@ type SlashCommand = {
 };
 
 const SLASH_COMMANDS: SlashCommand[] = [
+    {
+      id: "camera",
+      title: "Take a photo",
+      subtitle: "Use your device camera",
+      prefix: "__camera__",
+      icon: Camera,
+      iconColor: "text-red-400",
+    },
   {
     id: "photos",
     title: "Add photos & files",
@@ -155,14 +185,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
     icon: Code,
     iconColor: "text-emerald-400",
   },
-  {
-    id: "dictate",
-    title: "Dictate",
-    subtitle: "Convert speech to text",
-    prefix: "__dictate__",
-    icon: Mic,
-    iconColor: "text-red-400",
-  },
+  
   {
     id: "think",
     title: "Thinking",
@@ -178,6 +201,14 @@ const SLASH_COMMANDS: SlashCommand[] = [
     prefix: "/search ",
     icon: Globe,
     iconColor: "text-cyan-400",
+  },
+  {
+    id: "deep-research",
+    title: "Deep research",
+    subtitle: "Get a detailed report",
+    prefix: "/research ",
+    icon: Search,
+    iconColor: "text-blue-500",
   },
   {
     id: "audio",
@@ -224,6 +255,7 @@ export default function Home() {
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConvId, setActiveConvId] = useState<string>("conv-new");
+  const [activeReplyMenuId, setActiveReplyMenuId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -236,6 +268,8 @@ export default function Home() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
+    const [cameraPreviewImage, setCameraPreviewImage] = useState<string | null>(null);
+    const cameraInputRef = useRef<HTMLInputElement>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false);
   const [firebaseConnected, setFirebaseConnected] = useState<boolean>(false);
@@ -244,9 +278,24 @@ export default function Home() {
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editChatTitle, setEditChatTitle] = useState("");
   const [showImagesModal, setShowImagesModal] = useState(false);
+  const [shareContent, setShareContent] = useState<string | null>(null);
+    const [editingImageUrl, setEditingImageUrl] = useState<string | null>(null);
+    const [editImagePrompt, setEditImagePrompt] = useState("");
+  const [chatSearchQuery, setChatSearchQuery] = useState("");
+  const [isPrivateMode, setIsPrivateMode] = useState(false);
+  const [showScheduled, setShowScheduled] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [libraryTab, setLibraryTab] = useState<"All" | "Images" | "Documents">("All");
+  const [scheduledInput, setScheduledInput] = useState("");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [showProjectsModal, setShowProjectsModal] = useState(false);
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [createProjectName, setCreateProjectName] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [moveToChatId, setMoveToChatId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
+  
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
@@ -408,8 +457,25 @@ export default function Home() {
     if (!currentUser) return;
 
     let unsubscribeFirestore: (() => void) | undefined;
+    let unsubscribeProjects: (() => void) | undefined;
 
     try {
+      const projectsRef = collection(db, "users", currentUser.uid, "projects");
+      unsubscribeProjects = onSnapshot(projectsRef, (snapshot) => {
+        const loadedProjects: Project[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          loadedProjects.push({
+            id: docSnap.id,
+            name: data.name,
+            color: data.color,
+            icon: data.icon,
+            createdAt: data.createdAt?.toMillis ? data.createdAt.toMillis() : data.createdAt,
+          });
+        });
+        setProjects(loadedProjects.sort((a, b) => b.createdAt - a.createdAt));
+      });
+
       const sessionsRef = collection(db, "chats");
       const q = query(sessionsRef, where("userId", "==", currentUser.uid), limit(100));
 
@@ -451,6 +517,7 @@ export default function Home() {
 
     return () => {
       if (unsubscribeFirestore) unsubscribeFirestore();
+      if (unsubscribeProjects) unsubscribeProjects();
     };
   }, [currentUser]);
 
@@ -519,7 +586,7 @@ export default function Home() {
 
   // Save Conversation to Firestore (chats/{id})
   const saveConversationToFirestore = async (conv: Conversation) => {
-    if (!currentUser) return;
+    if (!currentUser || conv.isPrivate) return;
     try {
       const sessionRef = doc(db, "chats", conv.id);
       await setDoc(sessionRef, {
@@ -528,7 +595,8 @@ export default function Home() {
         title: conv.title,
         messages: conv.messages,
         messageCount: conv.messages.length,
-        isPinned: conv.isPinned || false,
+          isPinned: conv.isPinned || false,
+          projectId: conv.projectId || null,
         updatedAt: serverTimestamp(),
         // Only set createdAt if it's not already set in the frontend, or let Firestore keep the old one via merge
       }, { merge: true });
@@ -574,35 +642,62 @@ export default function Home() {
   });
 
   // Voice Input Speech Recognition
-  const startListening = useCallback(() => {
-    if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
-      showToast("Voice recognition is not supported in this browser. Please use Chrome.");
-      return;
-    }
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.lang = "bn-BD";
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    recognition.onstart = () => setIsListening(true);
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setInput((prev) => (prev ? prev + " " + transcript : transcript));
-      setIsListening(false);
-      showToast("Voice transcribed!");
-    };
-    recognition.onerror = () => setIsListening(false);
-    recognition.onend = () => setIsListening(false);
-    recognitionRef.current = recognition;
-    recognition.start();
-  }, []);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
 
-  const stopListening = useCallback(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-    setIsListening(false);
-  }, []);
+    const startListening = useCallback(async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mediaRecorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = mediaRecorder;
+        audioChunksRef.current = [];
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) audioChunksRef.current.push(e.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+          setIsListening(true);
+          showToast("Transcribing voice...");
+          
+          try {
+            const formData = new FormData();
+            formData.append("audio", audioBlob, "audio.webm");
+            const res = await fetch("/api/transcribe", {
+              method: "POST",
+              body: formData,
+            });
+            
+            if (res.ok) {
+              const data = await res.json();
+              if (data.text) {
+                setInput((prev) => (prev ? prev + " " + data.text : data.text));
+                showToast("Voice transcribed!");
+              }
+            } else {
+              showToast("Transcription failed.");
+            }
+          } catch (err) {
+            showToast("Error transcribing voice.");
+          } finally {
+            setIsListening(false);
+            stream.getTracks().forEach(track => track.stop());
+          }
+        };
+
+        mediaRecorder.start();
+        setIsListening(true);
+      } catch (err) {
+        showToast("Microphone access denied. Please allow microphone permissions.");
+      }
+    }, []);
+
+    const stopListening = useCallback(() => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+        mediaRecorderRef.current.stop();
+      }
+    }, []);
 
   // Text-to-Speech (Read Aloud)
   const toggleSpeak = (id: string, text: string) => {
@@ -657,14 +752,67 @@ export default function Home() {
     showToast(liked ? "Feedback submitted (Liked 👍)" : "Feedback submitted (Disliked 👎)");
   };
 
+  // Create New Project
+  const handleCreateProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser || !createProjectName.trim()) return;
+    
+    // Pick a random color and icon for simplicity
+    const colors = ["bg-blue-500", "bg-emerald-500", "bg-purple-500", "bg-rose-500", "bg-amber-500", "bg-cyan-500"];
+    const icons = ["Folder", "Brain", "Briefcase", "Heart", "Plane", "PenTool"];
+    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+    const randomIcon = icons[Math.floor(Math.random() * icons.length)];
+    
+    try {
+      const newProjectId = "proj-" + Date.now();
+      const projRef = doc(db, "users", currentUser.uid, "projects", newProjectId);
+      await setDoc(projRef, {
+        name: createProjectName.trim(),
+        color: randomColor,
+        icon: randomIcon,
+        createdAt: serverTimestamp(),
+      });
+      setCreateProjectName("");
+      setShowCreateProject(false);
+      showToast("Project created successfully!");
+    } catch (err) {
+      showToast("Error creating project");
+    }
+  };
+
   // Create New Chat
+  const handleBranchChat = async (msgId: string) => {
+    if (!activeConversation) return;
+    const msgIndex = activeConversation.messages.findIndex(m => m.id === msgId);
+    if (msgIndex === -1) return;
+    const branchedMessages = activeConversation.messages.slice(0, msgIndex + 1);
+    const newId = "conv-" + Date.now();
+    const newConv: Conversation = {
+      id: newId,
+      title: (activeConversation.title || "New chat") + " (Branch)",
+      messages: branchedMessages,
+      updatedAt: Date.now(),
+      isPrivate: activeConversation.isPrivate,
+      projectId: activeConversation.projectId
+    };
+    setConversations(prev => [newConv, ...prev]);
+    setActiveConvId(newId);
+    setActiveReplyMenuId(null);
+    if (currentUser && !isPrivateMode) {
+      saveConversationToFirestore(newConv);
+    }
+    showToast("Branched into new chat!");
+  };
+
   const handleNewChat = () => {
+    setShowScheduled(false); setShowLibrary(false);
     const newId = "conv-" + Date.now();
     const newConv: Conversation = {
       id: newId,
       title: "New chat",
       messages: [],
       updatedAt: Date.now(),
+      isPrivate: isPrivateMode,
     };
     setConversations((prev) => [newConv, ...prev]);
     setActiveConvId(newId);
@@ -748,14 +896,16 @@ export default function Home() {
   // Handle Slash Command Selection
   const handleSelectCommand = (cmd: SlashCommand) => {
     setShowSlashMenu(false);
-    if (cmd.prefix === "__file_upload__") {
+    if (cmd.prefix === "__camera__") {
+        cameraInputRef.current?.click();
+        return;
+      }
+
+      if (cmd.prefix === "__file_upload__") {
       fileInputRef.current?.click();
       return;
     }
-    if (cmd.prefix === "__dictate__") {
-      startListening();
-      return;
-    }
+    
     if (cmd.prefix === "__temporary__") {
       showToast("Temporary chat mode enabled 🕶️");
       return;
@@ -764,51 +914,116 @@ export default function Home() {
     textareaRef.current?.focus();
   };
 
-  // File Upload (Cloudinary)
+  const handleCameraCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setCameraPreviewImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    };
+
+    const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024): Promise<string> => {
+      return new Promise((resolve) => {
+        const img = new window.Image();
+        img.src = base64Str;
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          
+          if (width > maxWidth || height > maxHeight) {
+            const ratio = Math.min(maxWidth / width, maxHeight / height);
+            width = Math.floor(width * ratio);
+            height = Math.floor(height * ratio);
+          }
+          
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            resolve(canvas.toDataURL("image/jpeg", 0.7)); // compress to 70% quality JPEG
+          } else {
+            resolve(base64Str); // Fallback if no canvas context
+          }
+        };
+        img.onerror = () => resolve(base64Str);
+      });
+    };
+
+    // File Upload (Cloudinary)
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+      const file = e.target.files?.[0];
+      if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      showToast("File size should be less than 5MB");
-      return;
-    }
+      if (file.size > 10 * 1024 * 1024) {
+        showToast("File size should be less than 10MB");
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        return;
+      }
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const base64Image = event.target?.result as string;
-      setPreviewImage(base64Image);
-
-      setIsUploadingImage(true);
-      showToast("Uploading image securely...");
-
-      try {
-        const res = await fetch("/api/upload", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ image: base64Image }),
-        });
-
-        const data = await res.json();
-        if (data.secure_url) {
-          setAttachedImage(data.secure_url);
-          showToast("Image attached! 🖼️");
-        } else {
-          throw new Error(data.error || "Upload failed");
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          const rawBase64 = event.target?.result as string;
+          setIsUploadingImage(true);
+          showToast("Optimizing and uploading image...");
+          const compressedBase64 = await compressImage(rawBase64);
+          setPreviewImage(compressedBase64);
+          try {
+            const res = await fetch("/api/upload", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ image: compressedBase64 }),
+            });
+            const data = await res.json();
+            if (data.secure_url) {
+              setAttachedImage(data.secure_url);
+              showToast("Image attached! 🖼️");
+            } else {
+              throw new Error(data.error || "Upload failed");
+            }
+          } catch (err: any) {
+            console.error("Upload error:", err);
+            showToast(`Upload failed: ${err.message}`);
+            setPreviewImage(null);
+            setAttachedImage(null);
+          } finally {
+            setIsUploadingImage(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+          }
+        };
+        reader.readAsDataURL(file);
+      } else {
+        // Document / Text File Logic
+        setIsUploadingImage(true);
+        showToast("Reading document...");
+        try {
+          const formData = new FormData();
+          formData.append("file", file);
+          const res = await fetch("/api/read-file", {
+            method: "POST",
+            body: formData,
+          });
+          const data = await res.json();
+          if (data.text) {
+             const fileContentContext = `\n\n[File Content: ${file.name}]\n${data.text}\n`;
+             setInput(prev => prev + fileContentContext);
+             showToast("Document read and added to prompt! 📄");
+          } else {
+            showToast("Failed to read document.");
+          }
+        } catch (err) {
+          showToast("Error reading document.");
+        } finally {
+          setIsUploadingImage(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
         }
-      } catch (err: any) {
-        console.error("Upload error:", err);
-        showToast(`Upload failed: ${err.message}`);
-        setPreviewImage(null);
-        setAttachedImage(null);
-      } finally {
-        setIsUploadingImage(false);
       }
     };
-    reader.readAsDataURL(file);
-  };
 
   // Check Daily Limit for Free Users
   const checkDailyLimitExceeded = () => {
@@ -870,6 +1085,7 @@ export default function Home() {
         title: textToSend.slice(0, 26) || "New chat",
         messages: [],
         updatedAt: Date.now(),
+        isPrivate: isPrivateMode,
       };
       setConversations((prev) => [targetConv!, ...prev.filter((c) => c.id !== "conv-new")]);
       setActiveConvId(currentConvId);
@@ -889,7 +1105,9 @@ export default function Home() {
       prev.map((c) => (c.id === currentConvId ? updatedConv : c))
     );
 
-    saveConversationToFirestore(updatedConv);
+    if (!updatedConv.isPrivate) {
+      saveConversationToFirestore(updatedConv);
+    }
     setIsLoading(true);
 
     abortControllerRef.current = new AbortController();
@@ -969,7 +1187,9 @@ export default function Home() {
         }),
         updatedAt: Date.now(),
       };
-      saveConversationToFirestore(completedConv);
+      if (!completedConv.isPrivate) {
+        saveConversationToFirestore(completedConv);
+      }
     } catch (error: any) {
       if (error.name === "AbortError") {
         console.warn("Fetch aborted due to ban.");
@@ -994,7 +1214,9 @@ export default function Home() {
       setConversations((prev) =>
         prev.map((c) => (c.id === currentConvId ? errorConv : c))
       );
-      saveConversationToFirestore(errorConv);
+      if (!errorConv.isPrivate) {
+        saveConversationToFirestore(errorConv);
+      }
     }
   };
 
@@ -1120,6 +1342,60 @@ export default function Home() {
   };
 
   // Reusable Chat Input Bar Component
+  const getAllLibraryFiles = () => {
+    const files: LibraryFile[] = [];
+    conversations.forEach((conv) => {
+      conv.messages.forEach((msg) => {
+        // User attached files
+        if (msg.role === "user" && msg.attachedFile) {
+          files.push({
+            id: msg.id + "-attached",
+            name: "Uploaded_Image_" + new Date(msg.timestamp).getTime().toString().slice(-6) + ".png",
+            type: "image",
+            url: msg.attachedFile,
+            sizeStr: "1.2 MB",
+            timestamp: msg.timestamp,
+            convId: conv.id,
+          });
+        }
+        
+        // Assistant generated files
+        if (msg.role === "assistant") {
+          // Images
+          const imgRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+          let imgMatch;
+          while ((imgMatch = imgRegex.exec(msg.content)) !== null) {
+            files.push({
+              id: msg.id + "-img-" + files.length,
+              name: (imgMatch[1] || "Generated_Image") + ".png",
+              type: "image",
+              url: imgMatch[2],
+              sizeStr: "2.5 MB",
+              timestamp: msg.timestamp,
+              convId: conv.id,
+            });
+          }
+          
+          // Audio
+          const audioRegex = /\[Download MP3\]\(([^)]+)\)/g;
+          let audioMatch;
+          while ((audioMatch = audioRegex.exec(msg.content)) !== null) {
+            files.push({
+              id: msg.id + "-audio-" + files.length,
+              name: "Generated_Audio.mp3",
+              type: "audio",
+              url: audioMatch[1],
+              sizeStr: "4.1 MB",
+              timestamp: msg.timestamp,
+              convId: conv.id,
+            });
+          }
+        }
+      });
+    });
+    return files.sort((a, b) => b.timestamp - a.timestamp);
+  };
+
   const renderInputForm = () => {
     const isMaintenanceBlocked = globalConfig.maintenanceMode && !isAdminUser;
     
@@ -1172,7 +1448,7 @@ export default function Home() {
             setIsThinkingMode(!isThinkingMode);
             showToast(!isThinkingMode ? "Thinking mode enabled 💡" : "Thinking mode disabled");
           }}
-          className={`px-2.5 py-1.5 rounded-full text-xs font-medium flex items-center gap-1 transition-all ${
+          className={`hidden md:flex px-2.5 py-1.5 rounded-full text-xs font-medium items-center gap-1 transition-all ${
             isThinkingMode
               ? "bg-white text-black font-semibold shadow-md"
               : "text-gray-400 hover:text-white hover:bg-white/10"
@@ -1187,7 +1463,7 @@ export default function Home() {
         <button
           type="button"
           onClick={isListening ? stopListening : startListening}
-          className={`p-2 rounded-full transition-all ${
+          className={`p-2 rounded-full transition-colors flex-shrink-0 ${
             isListening
               ? "bg-red-500 text-white animate-pulse"
               : "text-gray-400 hover:text-white hover:bg-white/10"
@@ -1231,6 +1507,70 @@ export default function Home() {
         <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-[#323232] text-white px-4 py-2 rounded-full text-xs font-medium shadow-2xl border border-white/10 animate-fade-in flex items-center gap-2">
           <Sparkles size={14} className="text-blue-400" />
           <span>{toastMessage}</span>
+        </div>
+      )}
+
+        {/* ================= SHARE PROMPT MODAL ================= */}
+      {shareContent && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="relative w-full max-w-sm bg-[#222222] border border-white/10 rounded-2xl p-5 shadow-2xl animate-fade-in flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-semibold text-white">Share</h2>
+              <button onClick={() => setShareContent(null)} className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+            
+            <div className="bg-[#2f2f2f] text-gray-200 text-sm p-4 rounded-xl mb-6 shadow-inner line-clamp-4">
+              {shareContent}
+            </div>
+            
+            <div className="flex items-center justify-center gap-6">
+              <button onClick={() => {
+                navigator.clipboard.writeText(shareContent || "");
+                showToast("Link copied to clipboard");
+                setShareContent(null);
+              }} className="flex flex-col items-center gap-2 group">
+                <div className="w-12 h-12 rounded-full bg-[#1e40af] flex items-center justify-center text-white group-hover:scale-105 transition-transform">
+                  <Link2 size={20} />
+                </div>
+                <span className="text-[11px] text-gray-400 group-hover:text-white transition-colors">Copy link</span>
+              </button>
+              
+              <button onClick={() => {
+                window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareContent || "")}`, "_blank");
+                setShareContent(null);
+              }} className="flex flex-col items-center gap-2 group">
+                <div className="w-12 h-12 rounded-full bg-black border border-gray-700 flex items-center justify-center text-white group-hover:scale-105 transition-transform">
+                  <span className="font-bold text-lg">𝕏</span>
+                </div>
+                <span className="text-[11px] text-gray-400 group-hover:text-white transition-colors">X</span>
+              </button>
+              
+              <button onClick={() => {
+                window.open("https://linkedin.com", "_blank");
+                setShareContent(null);
+              }} className="flex flex-col items-center gap-2 group">
+                <div className="w-12 h-12 rounded-full bg-[#0077b5] flex items-center justify-center text-white group-hover:scale-105 transition-transform">
+                  <span className="font-bold text-lg">in</span>
+                </div>
+                <span className="text-[11px] text-gray-400 group-hover:text-white transition-colors">LinkedIn</span>
+              </button>
+
+              <button onClick={() => {
+                window.open("https://reddit.com", "_blank");
+                setShareContent(null);
+              }} className="flex flex-col items-center gap-2 group">
+                <div className="w-12 h-12 rounded-full bg-[#ff4500] flex items-center justify-center text-white group-hover:scale-105 transition-transform">
+                  <MessageSquare size={20} />
+                </div>
+                <span className="text-[11px] text-gray-400 group-hover:text-white transition-colors">Reddit</span>
+              </button>
+            </div>
+            <div className="mt-6 flex justify-end items-center">
+               <span className="text-[11px] text-gray-500 font-bold tracking-widest uppercase">globalgeniusai</span>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1482,11 +1822,109 @@ export default function Home() {
       )}
 
       {/* Hidden File Input */}
-      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,application/pdf,text/plain,.csv,.md,.json" className="hidden" />
+        <input type="file" ref={cameraInputRef} onChange={handleCameraCapture} accept="image/*" capture="environment" className="hidden" />
 
       {/* ================= LEFT SIDEBAR ================= */}
       {/* Mobile Backdrop */}
-      {isSidebarOpen && (
+      {/* ================= CAMERA PREVIEW MODAL ================= */}
+        {/* ================= EDIT IMAGE MODAL ================= */}
+        {editingImageUrl && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="relative w-full max-w-lg bg-[#222222] border border-white/10 rounded-2xl p-5 shadow-2xl animate-fade-in flex flex-col">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2"><Edit3 size={18} className="text-blue-400" /> Edit Image</h2>
+                <button onClick={() => { setEditingImageUrl(null); setEditImagePrompt(""); }} className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+                  <X size={16} />
+                </button>
+              </div>
+              
+              <img src={editingImageUrl} alt="To Edit" className="w-full h-48 object-cover rounded-xl mb-4 border border-white/5 shadow-inner" />
+              
+              <div className="relative flex items-center mb-2">
+                <input
+                  type="text"
+                  placeholder="e.g. Make it cyberpunk style, change background to red..."
+                  value={editImagePrompt}
+                  onChange={(e) => setEditImagePrompt(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Enter" && editImagePrompt.trim()) {
+                      const prompt = editImagePrompt.trim();
+                      setEditingImageUrl(null);
+                      setEditImagePrompt("");
+                      
+                      // Fallback logic to pollinations image-to-image (using the original image URL as seed text context + new prompt)
+                      const combinedPrompt = encodeURIComponent(`${prompt}, based on image at ${editingImageUrl}`);
+                      const randomSeed = Math.floor(Math.random() * 1000000);
+                      const newImageUrl = `https://image.pollinations.ai/prompt/${combinedPrompt}?model=flux&seed=${randomSeed}&nologo=true`;
+                      
+                      const aiMsgId = "ai-" + Date.now();
+                      const editMsg = {
+                        id: aiMsgId,
+                        role: "assistant",
+                        content: `Here is your edited image:\n\n![${prompt}](${newImageUrl})`,
+                        timestamp: Date.now()
+                      };
+                      setConversations(prev => prev.map(c => c.id === activeConvId ? { ...c, messages: [...c.messages, editMsg as any] } : c));
+                    }
+                  }}
+                  className="w-full bg-[#111111] text-white px-4 py-3 rounded-xl border border-white/10 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none text-sm pr-12 transition-all"
+                  autoFocus
+                />
+                <button 
+                  onClick={async () => {
+                    if (!editImagePrompt.trim()) return;
+                    const prompt = editImagePrompt.trim();
+                    setEditingImageUrl(null);
+                    setEditImagePrompt("");
+                    
+                    const combinedPrompt = encodeURIComponent(`${prompt}, based on image at ${editingImageUrl}`);
+                    const randomSeed = Math.floor(Math.random() * 1000000);
+                    const newImageUrl = `https://image.pollinations.ai/prompt/${combinedPrompt}?model=flux&seed=${randomSeed}&nologo=true`;
+                    
+                    const aiMsgId = "ai-" + Date.now();
+                    const editMsg = {
+                      id: aiMsgId,
+                      role: "assistant",
+                      content: `Here is your edited image:\n\n![${prompt}](${newImageUrl})`,
+                      timestamp: Date.now()
+                    };
+                    setConversations(prev => prev.map(c => c.id === activeConvId ? { ...c, messages: [...c.messages, editMsg as any] } : c));
+                  }}
+                  className="absolute right-2 p-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors"
+                >
+                  <Sparkles size={16} />
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 px-1">Press Enter to edit.</p>
+            </div>
+          </div>
+        )}
+
+        {cameraPreviewImage && (
+          <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4">
+            <img src={cameraPreviewImage} alt="Camera capture" className="max-w-full max-h-[70vh] rounded-2xl shadow-2xl mb-8 object-contain" />
+            <div className="flex items-center gap-8">
+              <button 
+                onClick={() => setCameraPreviewImage(null)}
+                className="w-14 h-14 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center text-red-400 transition-colors"
+              >
+                <X size={32} />
+              </button>
+              <button 
+                onClick={() => {
+                  setAttachedImage(cameraPreviewImage);
+                  setCameraPreviewImage(null);
+                }}
+                className="w-16 h-16 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center text-white shadow-lg transition-colors"
+              >
+                <Check size={36} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {isSidebarOpen && (
         <div
           className="fixed inset-0 z-30 bg-black/60 md:hidden backdrop-blur-sm"
           onClick={() => setIsSidebarOpen(false)}
@@ -1513,6 +1951,20 @@ export default function Home() {
           >
             <PanelLeft size={18} />
           </button>
+        </div>
+
+        {/* Chat Search */}
+        <div className="px-3 pb-2 pt-1">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+            <input
+              type="text"
+              placeholder="Search chats..."
+              value={chatSearchQuery}
+              onChange={(e) => setChatSearchQuery(e.target.value)}
+              className="w-full bg-transparent border border-white/10 text-white text-xs rounded-xl pl-8 pr-3 py-2 outline-none hover:bg-white/5 focus:bg-white/10 transition-colors placeholder-gray-500 font-medium"
+            />
+          </div>
         </div>
 
         {/* New Chat Button */}
@@ -1545,19 +1997,16 @@ export default function Home() {
             <ImageIcon size={15} className="text-gray-400" />
             <span>Images</span>
           </button>
-          <button onClick={() => showToast("Coming soon")} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
-            <Folder size={15} className="text-gray-400" />
-            <span>Library</span>
+          <button onClick={() => setShowLibrary(true)} className={`flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors ${showLibrary ? "bg-white/10 text-white" : ""}`}>
+            <Folder size={15} className={showLibrary ? "text-white" : "text-gray-400"} />
+            <span className={showLibrary ? "font-medium" : ""}>Library</span>
           </button>
-          <button onClick={() => showToast("Coming soon")} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
-            <Calendar size={15} className="text-gray-400" />
-            <span>Scheduled</span>
+          <button onClick={() => setShowScheduled(true)} className={`flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors ${showScheduled ? "bg-white/10 text-white" : ""}`}>
+            <Calendar size={15} className={showScheduled ? "text-white" : "text-gray-400"} />
+            <span className={showScheduled ? "font-medium" : ""}>Scheduled</span>
           </button>
-          <button onClick={() => showToast("Coming soon")} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
-            <Sliders size={15} className="text-gray-400" />
-            <span>Plugins</span>
-          </button>
-          <button onClick={() => showToast("Coming soon")} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
+
+          <button onClick={() => setShowProjectsModal(true)} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
             <Layers size={15} className="text-gray-400" />
             <span>Projects</span>
           </button>
@@ -1577,7 +2026,7 @@ export default function Home() {
             <div className="fixed inset-0 z-30" onClick={() => setOpenMenuId(null)} />
           )}
 
-          {conversations.map((c) => {
+          {conversations.filter(c => !c.isPrivate && (c.title || "New chat").toLowerCase().includes(chatSearchQuery.toLowerCase())).map((c) => {
             const isActive = c.id === activeConvId;
             const isEditing = editingChatId === c.id;
             
@@ -1585,7 +2034,7 @@ export default function Home() {
               <div
                 key={c.id}
                 onClick={() => {
-                  if (!isEditing) setActiveConvId(c.id);
+                  if (!isEditing) { setActiveConvId(c.id); setShowScheduled(false); setShowLibrary(false); }
                 }}
                 className={`group relative flex items-center justify-between w-full px-3 py-2 rounded-xl text-xs cursor-pointer transition-colors ${
                   isActive ? "bg-white/10 text-white font-medium" : "text-gray-400 hover:bg-white/5 hover:text-gray-200"
@@ -1611,7 +2060,7 @@ export default function Home() {
                 )}
 
                 {!isEditing && (
-                  <div className={`absolute right-2 flex items-center transition-opacity ${openMenuId === c.id ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+                  <div className="absolute right-2 flex items-center opacity-100">
                     <div className="w-4 h-full absolute -left-4 bg-gradient-to-r from-transparent to-[#171717] group-hover:to-[#222222]" />
                     <button
                       onClick={(e) => {
@@ -1636,24 +2085,34 @@ export default function Home() {
                       <span>{c.isPinned ? "Unpin" : "Pin"}</span>
                     </button>
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingChatId(c.id);
-                        setEditChatTitle(c.title || "New chat");
-                        setOpenMenuId(null);
-                      }}
-                      className="flex items-center gap-2.5 w-full px-3 py-2 hover:bg-white/10 transition-colors text-left"
-                    >
-                      <Edit3 size={13} />
-                      <span>Rename</span>
-                    </button>
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingChatId(c.id);
+                          setEditChatTitle(c.title || "New chat");
+                          setOpenMenuId(null);
+                        }}
+                        className="flex items-center gap-2.5 w-full px-3 py-2 hover:bg-white/10 transition-colors text-left"
+                      >
+                        <Edit3 size={13} />
+                        <span>Rename</span>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMoveToChatId(c.id);
+                          setOpenMenuId(null);
+                        }}
+                        className="flex items-center gap-2.5 w-full px-3 py-2 hover:bg-white/10 transition-colors text-left"
+                      >
+                        <Folder size={13} />
+                        <span>Move to Project</span>
+                      </button>
                     <button
                       onClick={(e) => {
-                        e.stopPropagation();
-                        navigator.clipboard.writeText(window.location.href);
-                        showToast("Link copied!");
-                        setOpenMenuId(null);
-                      }}
+                          e.stopPropagation();
+                          setShareContent(`Check out my chat on globalgeniusai: https://globalgeniusai.com/chat/${c.id}`);
+                          setOpenMenuId(null);
+                        }}
                       className="flex items-center gap-2.5 w-full px-3 py-2 hover:bg-white/10 transition-colors text-left"
                     >
                       <Share2 size={13} />
@@ -1794,21 +2253,29 @@ export default function Home() {
       {/* ================= MAIN CHAT CONTAINER ================= */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-[#212121]">
         {/* Top Navbar */}
-        <header className="h-14 flex items-center justify-between px-2 sm:px-4 border-b border-white/5 sticky top-0 bg-[#212121]/90 backdrop-blur-md z-10 gap-2">
-          <div className="flex items-center gap-1 sm:gap-3 flex-shrink-0">
-            {!isSidebarOpen && (
-              <button
-                onClick={() => setIsSidebarOpen(true)}
-                className="p-1.5 sm:p-2 hover:bg-white/10 rounded-lg text-gray-300 transition-colors"
-                title="Open sidebar"
-              >
-                <PanelLeft size={18} />
-              </button>
-            )}
-            <span className="font-semibold text-xs sm:text-sm text-gray-200 truncate max-w-[100px] sm:max-w-[200px]">
-              {isNewChat ? "globalgeniusai" : activeConversation?.title || "globalgeniusai"}
-            </span>
-          </div>
+        <header className="h-14 flex items-center justify-between px-2 sm:px-4 border-b border-white/5 sticky top-0 bg-[#212121]/90 backdrop-blur-md z-10 relative">
+            <div className="flex items-center gap-1 sm:gap-3 z-10">
+              {!isSidebarOpen && (
+                <button
+                  onClick={() => setIsSidebarOpen(true)}
+                  className="p-1.5 sm:p-2 hover:bg-white/10 rounded-lg text-gray-300 transition-colors"
+                  title="Open sidebar"
+                >
+                  <PanelLeft size={18} />
+                </button>
+              )}
+              {/* Desktop Title */}
+              <span className="hidden md:inline font-semibold text-xs sm:text-sm text-gray-200 truncate max-w-[200px]">
+                {isNewChat ? "globalgeniusai" : activeConversation?.title || "globalgeniusai"}
+              </span>
+            </div>
+
+            {/* Mobile Center Logo */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none md:hidden">
+              <span className="font-bold text-gray-200 text-base flex items-center gap-1">
+                globalgeniusai <ChevronDown size={14} className="text-gray-400" />
+              </span>
+            </div>
 
           {isBannedUser && (
             <div className="absolute left-1/2 -translate-x-1/2 top-14 sm:top-auto sm:static bg-red-500/20 text-red-400 px-3 py-1 sm:px-4 sm:py-1.5 rounded-b-lg sm:rounded-full text-[10px] sm:text-xs font-bold border border-t-0 sm:border-t border-red-500/30 flex items-center gap-1 sm:gap-2 shadow-lg sm:shadow-none z-20 whitespace-nowrap">
@@ -1842,8 +2309,11 @@ export default function Home() {
           </div>
 
           {/* Right Action Buttons / Auth */}
-          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
-            {isAdminUser && (
+            <div className="flex items-center gap-1 sm:gap-2 z-10">
+              <button onClick={handleNewChat} className="md:hidden p-1.5 text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors" title="New chat">
+                <Edit3 size={18} />
+              </button>
+              {isAdminUser && (
               <Link
                 href="/admin"
                 className="flex items-center gap-1 text-[10px] sm:text-xs font-semibold bg-red-600/30 text-amber-300 border border-red-500/30 px-2 py-1 sm:px-3 sm:py-1.5 rounded-full hover:bg-red-600/40 transition-colors shadow-sm"
@@ -1877,14 +2347,16 @@ export default function Home() {
             )}
 
             <button
-              onClick={() => {
-                navigator.clipboard.writeText(window.location.href);
-                showToast("Chat link copied!");
-              }}
-              className="flex items-center gap-1.5 text-xs text-gray-300 hover:text-white px-2.5 py-1.5 hover:bg-white/10 rounded-lg transition-colors"
+              onClick={() => setIsPrivateMode(!isPrivateMode)}
+              className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors ${
+                isPrivateMode 
+                  ? "bg-purple-500/20 text-purple-400 hover:bg-purple-500/30" 
+                  : "text-gray-300 hover:text-white hover:bg-white/10"
+              }`}
+              title={isPrivateMode ? "Private mode active (not saving)" : "Public mode (saving)"}
             >
-              <Share size={14} />
-              <span className="hidden sm:inline">Share</span>
+              {isPrivateMode ? <Lock size={14} /> : <Globe size={14} />}
+              <span className="hidden sm:inline">{isPrivateMode ? "Private Mode" : "Public Mode"}</span>
             </button>
 
             {currentUser && (
@@ -1901,7 +2373,191 @@ export default function Home() {
 
         {/* Chat Messages / New Chat Center Area */}
         <div className="flex-1 overflow-y-auto px-4 md:px-8 scroll-smooth flex flex-col">
-          {isNewChat ? (
+          
+          
+          {showLibrary ? (
+            <div className="flex-1 flex flex-col w-full max-w-4xl mx-auto px-4 py-8 relative animate-fade-in text-white">
+              {/* Header */}
+              <div className="flex justify-between items-center mb-8 mt-4">
+                <h2 className="text-2xl font-bold">Library</h2>
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search"
+                      className="bg-[#2a2a2a] border border-transparent focus:border-white/20 text-white text-sm rounded-full py-1.5 pl-9 pr-4 outline-none transition-colors w-48"
+                    />
+                  </div>
+                  <button onClick={() => showToast("Upload coming soon")} className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-black hover:bg-gray-200 rounded-full text-sm font-medium transition-colors">
+                    New <ChevronRight size={14} className="rotate-90" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Tabs and Controls */}
+              <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setLibraryTab("All")} className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${libraryTab === "All" ? "bg-white/20 text-white" : "text-gray-400 hover:text-white"}`}>All</button>
+                  <button onClick={() => setLibraryTab("Images")} className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${libraryTab === "Images" ? "bg-white/20 text-white" : "text-gray-400 hover:text-white"}`}>Images</button>
+                  <button onClick={() => setLibraryTab("Documents")} className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${libraryTab === "Documents" ? "bg-white/20 text-white" : "text-gray-400 hover:text-white"}`}>Documents</button>
+                </div>
+                <div className="flex items-center gap-2 text-gray-400">
+                  <button className="p-1.5 hover:bg-white/10 rounded-md transition-colors"><Layers size={16} /></button>
+                  <button className="p-1.5 hover:bg-white/10 rounded-md transition-colors"><LayoutGrid size={16} /></button>
+                  <button className="p-1.5 hover:bg-white/10 rounded-md transition-colors"><Menu size={16} /></button>
+                </div>
+              </div>
+
+              {/* Table Header */}
+              <div className="grid grid-cols-12 gap-4 px-4 py-2 text-xs font-medium text-gray-400 mb-2">
+                <div className="col-span-6">Name</div>
+                <div className="col-span-3">Modified</div>
+                <div className="col-span-3">Size</div>
+              </div>
+
+              {/* File List */}
+              <div className="flex-1 overflow-y-auto">
+                {(() => {
+                  const files = getAllLibraryFiles().filter(f => {
+                    if (libraryTab === "Images") return f.type === "image";
+                    if (libraryTab === "Documents") return f.type !== "image";
+                    return true;
+                  });
+
+                  if (files.length === 0) {
+                    return <div className="text-center text-gray-500 py-20">No files found in your library.</div>;
+                  }
+
+                  return files.map((file) => (
+                    <div key={file.id} className="group grid grid-cols-12 gap-4 items-center px-4 py-3 hover:bg-white/5 rounded-xl cursor-pointer transition-colors border border-transparent hover:border-white/5" onClick={() => window.open(file.url, "_blank")}>
+                      <div className="col-span-6 flex items-center gap-3 truncate pr-4 relative">
+                        <div className="absolute -left-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="w-4 h-4 border-2 border-gray-500 rounded flex items-center justify-center bg-[#1e1e1e]" onClick={(e) => e.stopPropagation()}></div>
+                        </div>
+                        <div className="pl-4 flex items-center gap-3 truncate">
+                          {file.type === "image" ? (
+                            <img src={file.url} className="w-8 h-8 rounded object-cover bg-black" alt="" />
+                          ) : (
+                            <div className="w-8 h-8 rounded bg-red-500/20 text-red-500 flex items-center justify-center"><FileText size={16} /></div>
+                          )}
+                          <span className="text-sm text-gray-200 truncate">{file.name}</span>
+                        </div>
+                      </div>
+                      <div className="col-span-3 text-xs text-gray-400">
+                        {new Date(file.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "numeric" })}
+                      </div>
+                      <div className="col-span-3 flex items-center justify-between text-xs text-gray-400">
+                        <span>{file.sizeStr}</span>
+                        <button className="opacity-0 group-hover:opacity-100 p-1 hover:text-white rounded hover:bg-white/10 transition-all" onClick={(e) => { e.stopPropagation(); showToast("Options menu"); }}>
+                          <MoreHorizontal size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ));
+                })()}
+              </div>
+            </div>
+          ) : showScheduled ? (
+
+            <div className="flex-1 flex flex-col w-full max-w-3xl mx-auto px-4 pt-12 relative animate-fade-in text-white">
+              {/* Header */}
+              <div className="flex justify-between items-start mb-2">
+                <h2 className="text-3xl font-bold">Scheduled</h2>
+                <button onClick={() => showToast("Active tasks modal coming soon")} className="flex items-center gap-1.5 px-3 py-1.5 bg-[#262626] hover:bg-[#303030] rounded-full text-xs font-medium border border-white/10 transition-colors">
+                  <Filter size={14} className="text-gray-400" />
+                  Active
+                </button>
+              </div>
+              <p className="text-sm text-gray-400 mb-8">Ask globalgeniusai to schedule tasks, set reminders, or monitor for updates.</p>
+
+              {/* Input Area */}
+              <div className="relative w-full mb-10 group">
+                <div className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">
+                  <Plus size={18} />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Schedule a task"
+                  value={scheduledInput}
+                  onChange={(e) => setScheduledInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && scheduledInput.trim()) {
+                      e.preventDefault();
+                      setShowScheduled(false); setShowLibrary(false);
+                      handleNewChat();
+                      setTimeout(() => {
+                        handleSendMessage(undefined, `Schedule a task: ${scheduledInput.trim()}`);
+                        setScheduledInput("");
+                      }, 100);
+                    }
+                  }}
+                  className="w-full bg-[#1a1a1a] border border-white/10 text-white rounded-2xl py-4 pl-11 pr-24 outline-none focus:bg-[#202020] focus:border-white/20 transition-all shadow-lg"
+                />
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                  <button className="p-2 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+                    <Mic size={18} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (scheduledInput.trim()) {
+                        setShowScheduled(false); setShowLibrary(false);
+                        handleNewChat();
+                        setTimeout(() => {
+                          handleSendMessage(undefined, `Schedule a task: ${scheduledInput.trim()}`);
+                          setScheduledInput("");
+                        }, 100);
+                      }
+                    }}
+                    className={`p-1.5 rounded-full transition-colors ${scheduledInput.trim() ? "bg-white text-black hover:bg-gray-200" : "bg-white/10 text-gray-400"}`}
+                  >
+                    <ArrowUp size={18} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Recommended Tasks */}
+              <div>
+                <button className="flex items-center gap-1 text-sm text-gray-300 font-medium hover:text-white mb-4">
+                  Recommended
+                  <ChevronRight size={14} className="rotate-90" />
+                </button>
+
+                <div className="flex flex-col gap-2">
+                  {[
+                    { title: "Weekend long read", subtitle: "Every Saturday, find me an exceptional recent long read based on my interests", icon: <Folder size={18} className="text-blue-400" />, iconBg: "bg-blue-400/10", prompt: "Schedule a task: Every Saturday, find me an exceptional recent long read based on my interests" },
+                    { title: "Sale monitor", subtitle: "Watch my favorite stores and let me know when there's a good sale", icon: <Tag size={18} className="text-orange-400" />, iconBg: "bg-orange-400/10", prompt: "Schedule a task: Watch my favorite stores and let me know when there's a good sale" },
+                    { title: "Concert alerts", subtitle: "Let me know when artists I like announce concerts near me", icon: <Music size={18} className="text-purple-400" />, iconBg: "bg-purple-400/10", prompt: "Schedule a task: Let me know when artists I like announce concerts near me" },
+                    { title: "Weekend ideas", subtitle: "Every Thursday, send me ideas for things to do nearby this weekend", icon: <Sparkles size={18} className="text-yellow-400" />, iconBg: "bg-yellow-400/10", prompt: "Schedule a task: Every Thursday, send me ideas for things to do nearby this weekend" },
+                  ].map((task, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        setShowScheduled(false); setShowLibrary(false);
+                        handleNewChat();
+                        setTimeout(() => handleSendMessage(undefined, task.prompt), 100);
+                      }}
+                      className="group flex items-center justify-between p-3 rounded-2xl hover:bg-[#1e1e1e] border border-transparent hover:border-white/5 transition-all text-left"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${task.iconBg}`}>
+                          {task.icon}
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-200">{task.title}</h4>
+                          <p className="text-xs text-gray-500 mt-0.5">{task.subtitle}</p>
+                        </div>
+                      </div>
+                      <div className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:bg-white/10 hover:text-white transition-colors opacity-0 group-hover:opacity-100">
+                        <Plus size={20} />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : isNewChat ? (
+
             // ================= NEW CHAT EXACT SCREEN =================
             <div className="flex-1 flex flex-col items-center justify-center max-w-2xl mx-auto w-full px-4 -mt-6">
               {/* Center Title */}
@@ -2026,6 +2682,13 @@ export default function Home() {
                           {copiedId === msg.id ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
                         </button>
                         <button
+                          onClick={() => setShareContent(msg.content)}
+                          className="p-1 hover:text-white rounded hover:bg-white/10 transition-colors"
+                          title="Share prompt"
+                        >
+                          <Share2 size={13} />
+                        </button>
+                        <button
                           onClick={() => {
                             setInput(msg.content);
                             textareaRef.current?.focus();
@@ -2093,23 +2756,61 @@ export default function Home() {
                         </button>
 
                         <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(msg.content);
-                            showToast("Response copied to share!");
-                          }}
-                          className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors"
-                          title="Share"
-                        >
+                            onClick={() => setShareContent(msg.content)}
+                            className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors"
+                            title="Share"
+                          >
                           <Share2 size={15} />
                         </button>
 
-                        <button
-                          onClick={() => showToast("More options")}
-                          className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors"
-                          title="More"
-                        >
-                          <MoreHorizontal size={15} />
-                        </button>
+                        <div className="relative">
+                            <button
+                              onClick={() => setActiveReplyMenuId(activeReplyMenuId === msg.id ? null : msg.id)}
+                              className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors"
+                              title="More"
+                            >
+                              <MoreHorizontal size={15} />
+                            </button>
+                            {activeReplyMenuId === msg.id && (
+                              <div className="absolute left-0 bottom-full mb-2 w-48 bg-[#262626] border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden text-gray-300 py-1 animate-in fade-in zoom-in-95 duration-200">
+                                <div className="px-3 py-2 border-b border-white/10 text-xs text-gray-500 font-medium">
+                                  Today, {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    setActiveReplyMenuId(null);
+                                    const linksMatch = msg.content.match(/\[([^\]]+)\]\(([^)]+)\)/g);
+                                    if (linksMatch && linksMatch.length > 0) {
+                                      showToast(`Found ${linksMatch.length} sources in response!`);
+                                    } else {
+                                      showToast("No sources found for this response.");
+                                    }
+                                  }}
+                                  className="flex items-center gap-3 w-full px-3 py-2.5 hover:bg-white/10 transition-colors text-left text-sm"
+                                >
+                                  <Book size={14} className="text-gray-400" />
+                                  <span>View sources</span>
+                                </button>
+                                <button
+                                  onClick={() => handleBranchChat(msg.id)}
+                                  className="flex items-center gap-3 w-full px-3 py-2.5 hover:bg-white/10 transition-colors text-left text-sm"
+                                >
+                                  <GitBranch size={14} className="text-gray-400" />
+                                  <span>Branch in new chat</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setActiveReplyMenuId(null);
+                                    toggleSpeak(msg.id, msg.content);
+                                  }}
+                                  className="flex items-center gap-3 w-full px-3 py-2.5 hover:bg-white/10 transition-colors text-left text-sm"
+                                >
+                                  <Volume2 size={14} className="text-gray-400" />
+                                  <span>Read aloud</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
                       </div>
                     </div>
                   )}
@@ -2193,6 +2894,166 @@ export default function Home() {
             </div>
           </div>
         )}
+      
+      {/* ================= PROJECTS MODAL ================= */}
+      {showProjectsModal && (
+        <div className="fixed inset-0 z-[60] bg-black flex flex-col animate-fade-in">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#121212]">
+            <button onClick={() => setShowProjectsModal(false)} className="p-2 bg-white/5 rounded-full hover:bg-white/10 text-white transition-colors">
+              <ChevronRight size={20} className="rotate-180" />
+            </button>
+            <h2 className="text-lg font-semibold text-white">Projects</h2>
+            <button onClick={() => setShowCreateProject(true)} className="p-2 bg-white/5 rounded-full hover:bg-white/10 text-white transition-colors">
+              <Plus size={20} />
+            </button>
+          </div>
+
+          {/* Tabs */}
+          <div className="flex items-center gap-6 px-6 py-4 bg-[#121212] border-b border-white/10 overflow-x-auto hide-scrollbar text-sm">
+            <button className="px-4 py-1.5 bg-white/20 text-white rounded-full font-medium whitespace-nowrap">All</button>
+            <button className="text-gray-400 font-medium hover:text-white transition-colors whitespace-nowrap">Created by you</button>
+            <button className="text-gray-400 font-medium hover:text-white transition-colors whitespace-nowrap">Shared with you</button>
+          </div>
+
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto bg-[#0a0a0a] p-4 relative">
+            {!selectedProjectId ? (
+              <div className="max-w-2xl mx-auto space-y-3 pb-24">
+                {projects.map(proj => (
+                  <div key={proj.id} onClick={() => setSelectedProjectId(proj.id)} className="flex items-center gap-4 p-3 rounded-2xl hover:bg-white/5 cursor-pointer transition-colors">
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white shadow-lg ${proj.color}`}>
+                      <Folder size={24} />
+                    </div>
+                    <div>
+                      <h3 className="text-white font-medium text-[15px]">{proj.name}</h3>
+                      <p className="text-xs text-gray-400 mt-0.5">{new Date(proj.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</p>
+                    </div>
+                  </div>
+                ))}
+                {projects.length === 0 && (
+                  <div className="text-center text-gray-500 mt-20 text-sm">No projects found. Create one by clicking the + button.</div>
+                )}
+              </div>
+            ) : (
+              <div className="max-w-2xl mx-auto pb-24">
+                <button onClick={() => setSelectedProjectId(null)} className="flex items-center gap-2 text-gray-400 hover:text-white mb-6 text-sm">
+                  <ChevronRight size={16} className="rotate-180" />
+                  Back to Projects
+                </button>
+                <h3 className="text-white font-bold text-xl mb-4">{projects.find(p => p.id === selectedProjectId)?.name}</h3>
+                <div className="space-y-2">
+                  {conversations.filter(c => c.projectId === selectedProjectId).map(c => (
+                    <div key={c.id} onClick={() => { setActiveConvId(c.id); setShowProjectsModal(false); }} className="p-3 bg-[#1e1e1e] border border-white/5 rounded-xl cursor-pointer hover:bg-white/10 transition-colors">
+                      <h4 className="text-gray-200 text-sm font-medium truncate">{c.title || "New chat"}</h4>
+                      <p className="text-xs text-gray-500 mt-1">{new Date(c.updatedAt).toLocaleDateString()}</p>
+                    </div>
+                  ))}
+                  {conversations.filter(c => c.projectId === selectedProjectId).length === 0 && (
+                    <div className="text-gray-500 text-sm">No chats in this project yet.</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Search Bar */}
+          {!selectedProjectId && (
+            <div className="absolute bottom-6 left-0 right-0 px-6 max-w-2xl mx-auto">
+              <div className="relative">
+                <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search"
+                  className="w-full bg-[#1e1e1e] text-white rounded-full py-3.5 pl-12 pr-4 outline-none focus:bg-[#252525] transition-colors shadow-xl border border-white/5"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ================= CREATE PROJECT MODAL ================= */}
+      
+      {/* ================= MOVE TO PROJECT MODAL ================= */}
+      {moveToChatId && (
+        <div className="fixed inset-0 z-[80] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-[#1e1e1e] border border-white/10 rounded-3xl p-6 shadow-2xl animate-fade-in flex flex-col">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-semibold text-white">Select Project</h2>
+              <button onClick={() => setMoveToChatId(null)} className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+              <button
+                onClick={async () => {
+                  if (currentUser) {
+                    const convRef = doc(db, "chats", moveToChatId);
+                    await setDoc(convRef, { projectId: null }, { merge: true });
+                    setConversations(prev => prev.map(c => c.id === moveToChatId ? { ...c, projectId: undefined } : c));
+                  }
+                  setMoveToChatId(null);
+                  showToast("Removed from project");
+                }}
+                className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/10 transition-colors text-left"
+              >
+                <div className="w-8 h-8 rounded-lg bg-gray-600 flex items-center justify-center text-white"><X size={16} /></div>
+                <span className="text-white text-sm font-medium">Remove from project</span>
+              </button>
+              {projects.map(proj => (
+                <button
+                  key={proj.id}
+                  onClick={async () => {
+                    if (currentUser) {
+                      const convRef = doc(db, "chats", moveToChatId);
+                      await setDoc(convRef, { projectId: proj.id }, { merge: true });
+                      setConversations(prev => prev.map(c => c.id === moveToChatId ? { ...c, projectId: proj.id } : c));
+                    }
+                    setMoveToChatId(null);
+                    showToast("Moved to " + proj.name);
+                  }}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-white/10 transition-colors text-left"
+                >
+                  <div className={`w-8 h-8 rounded-lg ${proj.color} flex items-center justify-center text-white`}>
+                    <Folder size={16} />
+                  </div>
+                  <span className="text-white text-sm font-medium">{proj.name}</span>
+                </button>
+              ))}
+              {projects.length === 0 && <p className="text-gray-500 text-sm">No projects found. Create one first.</p>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCreateProject && (
+        <div className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <form onSubmit={handleCreateProject} className="w-full max-w-sm bg-[#1e1e1e] border border-white/10 rounded-3xl p-6 shadow-2xl animate-fade-in flex flex-col">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-semibold text-white">Create Project</h2>
+              <button type="button" onClick={() => setShowCreateProject(false)} className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+            
+            <input
+              type="text"
+              required
+              value={createProjectName}
+              onChange={(e) => setCreateProjectName(e.target.value)}
+              placeholder="Project Name"
+              className="w-full bg-black/50 text-white rounded-xl px-4 py-3 border border-white/10 focus:border-purple-500 outline-none mb-6 text-sm"
+              autoFocus
+            />
+            
+            <button type="submit" disabled={!createProjectName.trim()} className="w-full py-3 bg-white text-black font-semibold rounded-xl hover:bg-gray-200 transition-colors disabled:opacity-50 text-sm">
+              Create
+            </button>
+          </form>
+        </div>
+      )}
+
       </main>
     </div>
   );
