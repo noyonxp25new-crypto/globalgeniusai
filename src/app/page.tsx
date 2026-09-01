@@ -2290,7 +2290,7 @@ export default function Home() {
       <main className="flex-1 flex flex-col h-full overflow-hidden relative bg-[#212121]">
         {/* Top Navbar */}
         <header className="h-14 flex items-center justify-between px-2 sm:px-4 border-b border-white/5 sticky top-0 bg-[#212121]/90 backdrop-blur-md z-10 relative">
-            <div className="flex items-center gap-1 sm:gap-3 z-10">
+            <div className="flex items-center gap-2 sm:gap-3 z-10">
               {!isSidebarOpen && (
                 <button
                   onClick={() => setIsSidebarOpen(true)}
@@ -2300,17 +2300,11 @@ export default function Home() {
                   <PanelLeft size={18} />
                 </button>
               )}
-              {/* Desktop Title */}
-              <span className="hidden md:inline font-semibold text-xs sm:text-sm text-gray-200 truncate max-w-[200px]">
-                {isNewChat ? "globalgeniusai" : activeConversation?.title || "globalgeniusai"}
-              </span>
-            </div>
-
-            {/* Mobile Center Logo */}
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none md:hidden">
-              <span className="font-bold text-gray-200 text-base flex items-center gap-1">
-                globalgeniusai <ChevronDown size={14} className="text-gray-400" />
-              </span>
+              {/* Logo / Dropdown Title on the left like ChatGPT */}
+              <div className="flex items-center gap-1 font-bold text-gray-200 text-sm sm:text-base cursor-pointer hover:text-white transition-colors">
+                <span>globalgeniusai</span>
+                <ChevronDown size={14} className="text-gray-400" />
+              </div>
             </div>
 
           {isBannedUser && (
@@ -2372,16 +2366,16 @@ export default function Home() {
             {!isProUser && (
               <button
                 onClick={() => setShowUpgradeModal(true)}
-                className="flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white px-2 py-1 sm:px-3 sm:py-1.5 rounded-full shadow-md transition-all whitespace-nowrap"
+                className="flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs font-semibold bg-white/10 hover:bg-white/20 text-white px-2.5 py-1 rounded-full transition-all whitespace-nowrap border border-white/10"
               >
-                <Sparkles size={12} className="sm:w-[13px] sm:h-[13px]" />
+                <Sparkles size={12} className="text-blue-400 sm:w-[13px] sm:h-[13px]" />
                 <span>Upgrade</span>
               </button>
             )}
 
             <button
               onClick={() => setIsPrivateMode(!isPrivateMode)}
-              className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors ${
+              className={`hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors ${
                 isPrivateMode 
                   ? "bg-purple-500/20 text-purple-400 hover:bg-purple-500/30" 
                   : "text-gray-300 hover:text-white hover:bg-white/10"
@@ -2402,6 +2396,21 @@ export default function Home() {
                 <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                 <path d="M18.375 2.625a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z" />
               </svg>
+            </button>
+
+            {/* ChatGPT-style 3 dots menu button */}
+            <button
+              onClick={() => {
+                if (activeConversation && activeConversation.messages.length > 0) {
+                  setShareContent(activeConversation.messages.map(m => `${m.role === 'user' ? 'User' : 'globalgeniusai'}: ${m.content}`).join('\n\n'));
+                } else {
+                  showToast("Chat options available during active conversations");
+                }
+              }}
+              className="p-1.5 text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors flex items-center justify-center"
+              title="Chat options"
+            >
+              <MoreHorizontal size={18} />
             </button>
 
             {currentUser && (
