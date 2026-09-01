@@ -2373,17 +2373,22 @@ export default function Home() {
               </button>
             )}
 
+            {/* Private Mode Switcher (Visible on mobile & desktop between Upgrade & New Chat) */}
             <button
-              onClick={() => setIsPrivateMode(!isPrivateMode)}
-              className={`hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors ${
+              onClick={() => {
+                const nextMode = !isPrivateMode;
+                setIsPrivateMode(nextMode);
+                showToast(nextMode ? "Private Mode enabled (chats not saved)" : "Public Mode enabled (chats saved)");
+              }}
+              className={`flex items-center gap-1 sm:gap-1.5 text-xs p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg transition-colors ${
                 isPrivateMode 
                   ? "bg-purple-500/20 text-purple-400 hover:bg-purple-500/30" 
                   : "text-gray-300 hover:text-white hover:bg-white/10"
               }`}
               title={isPrivateMode ? "Private mode active (not saving)" : "Public mode (saving)"}
             >
-              {isPrivateMode ? <Lock size={14} /> : <Globe size={14} />}
-              <span className="hidden sm:inline">{isPrivateMode ? "Private Mode" : "Public Mode"}</span>
+              {isPrivateMode ? <Lock size={15} className="text-purple-400" /> : <Globe size={15} />}
+              <span className="hidden md:inline">{isPrivateMode ? "Private" : "Public"}</span>
             </button>
 
             {/* ChatGPT-style New Chat Icon */}
@@ -2398,20 +2403,7 @@ export default function Home() {
               </svg>
             </button>
 
-            {/* ChatGPT-style 3 dots menu button */}
-            <button
-              onClick={() => {
-                if (activeConversation && activeConversation.messages.length > 0) {
-                  setShareContent(activeConversation.messages.map(m => `${m.role === 'user' ? 'User' : 'globalgeniusai'}: ${m.content}`).join('\n\n'));
-                } else {
-                  showToast("Chat options available during active conversations");
-                }
-              }}
-              className="p-1.5 text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors flex items-center justify-center"
-              title="Chat options"
-            >
-              <MoreHorizontal size={18} />
-            </button>
+
 
             {currentUser && (
               <button
