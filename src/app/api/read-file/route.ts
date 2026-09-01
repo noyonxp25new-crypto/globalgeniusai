@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-const pdfParse = require('pdf-parse');
+
 
 export async function POST(req: Request) {
   try {
@@ -18,6 +18,7 @@ export async function POST(req: Request) {
     let text = "";
 
     if (type === "application/pdf" || name.endsWith(".pdf")) {
+      const pdfParse = require('pdf-parse');
       const data = await pdfParse(buffer);
       text = data.text;
     } else if (
