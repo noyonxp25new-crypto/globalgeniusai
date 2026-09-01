@@ -150,24 +150,46 @@ type SlashCommand = {
   prefix: string;
   icon: any;
   iconColor: string;
+  mobileOnly?: boolean;
+  desktopOnly?: boolean;
 };
 
 const SLASH_COMMANDS: SlashCommand[] = [
-    {
-      id: "camera",
-      title: "Take a photo",
-      subtitle: "Use your device camera",
-      prefix: "__camera__",
-      icon: Camera,
-      iconColor: "text-red-400",
-    },
   {
-    id: "photos",
+    id: "camera",
+    title: "Take a photo",
+    subtitle: "Use your device camera",
+    prefix: "__camera__",
+    icon: Camera,
+    iconColor: "text-red-400",
+    mobileOnly: true,
+  },
+  {
+    id: "photos_desktop",
     title: "Add photos & files",
     subtitle: "Upload from computer",
-    prefix: "__file_upload__",
+    prefix: "__desktop_upload__",
     icon: Paperclip,
     iconColor: "text-blue-400",
+    desktopOnly: true,
+  },
+  {
+    id: "photos",
+    title: "Add photos",
+    subtitle: "Upload from gallery",
+    prefix: "__photo_upload__",
+    icon: ImageIcon,
+    iconColor: "text-blue-400",
+    mobileOnly: true,
+  },
+  {
+    id: "files",
+    title: "Add files",
+    subtitle: "Upload document",
+    prefix: "__file_upload__",
+    icon: Paperclip,
+    iconColor: "text-green-400",
+    mobileOnly: true,
   },
   {
     id: "image",
@@ -298,7 +320,8 @@ export default function Home() {
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-    const photoInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const desktopFileInputRef = useRef<HTMLInputElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
 
   const activeConversation = conversations.find((c) => c.id === activeConvId);
@@ -898,12 +921,19 @@ export default function Home() {
   const handleSelectCommand = (cmd: SlashCommand) => {
     setShowSlashMenu(false);
     if (cmd.prefix === "__camera__") {
-        cameraInputRef.current?.click();
-        return;
-      }
-
-      if (cmd.prefix === "__file_upload__") {
+      cameraInputRef.current?.click();
+      return;
+    }
+    if (cmd.prefix === "__photo_upload__") {
+      photoInputRef.current?.click();
+      return;
+    }
+    if (cmd.prefix === "__file_upload__") {
       fileInputRef.current?.click();
+      return;
+    }
+    if (cmd.prefix === "__desktop_upload__") {
+      desktopFileInputRef.current?.click();
       return;
     }
     
@@ -1825,10 +1855,11 @@ export default function Home() {
         </div>
       )}
 
-      {/* Hidden File Input */}
+      {/* Hidden File Inputs */}
       <input type="file" ref={photoInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
-        <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="application/pdf,text/plain,.csv,.md,.json" className="hidden" />
-        <input type="file" ref={cameraInputRef} onChange={handleCameraCapture} accept="image/*" capture="environment" className="hidden" />
+      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="application/pdf,text/plain,.csv,.md,.json" className="hidden" />
+      <input type="file" ref={desktopFileInputRef} onChange={handleFileChange} accept="image/*,application/pdf,text/plain,.csv,.md,.json" className="hidden" />
+      <input type="file" ref={cameraInputRef} onChange={handleCameraCapture} accept="image/*" capture="environment" className="hidden" />
 
       {/* ================= LEFT SIDEBAR ================= */}
       {/* Mobile Backdrop */}
@@ -2315,9 +2346,6 @@ export default function Home() {
 
           {/* Right Action Buttons / Auth */}
             <div className="flex items-center gap-1 sm:gap-2 z-10">
-              <button onClick={handleNewChat} className="md:hidden p-1.5 text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors" title="New chat">
-                <Edit3 size={18} />
-              </button>
               {isAdminUser && (
               <Link
                 href="/admin"
@@ -2364,10 +2392,22 @@ export default function Home() {
               <span className="hidden sm:inline">{isPrivateMode ? "Private Mode" : "Public Mode"}</span>
             </button>
 
+            {/* ChatGPT-style New Chat Icon */}
+            <button
+              onClick={handleNewChat}
+              className="p-1.5 text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors flex items-center justify-center"
+              title="New chat"
+            >
+              <svg className="w-[19px] h-[19px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                <path d="M18.375 2.625a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4Z" />
+              </svg>
+            </button>
+
             {currentUser && (
               <button
-                onClick={handleSignOut}
-                className="p-1.5 hover:bg-red-500/10 text-gray-400 hover:text-red-400 rounded-lg transition-colors"
+                  onClick={handleSignOut}
+                  className="hidden md:flex p-1.5 hover:bg-red-500/10 text-gray-400 hover:text-red-400 rounded-lg transition-colors"
                 title="Log out"
               >
                 <LogOut size={16} />
@@ -2607,9 +2647,11 @@ export default function Home() {
                           <button
                             key={cmd.id}
                             onClick={() => handleSelectCommand(cmd)}
-                            className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
-                              isSel ? "bg-[#333333] text-white" : "text-gray-300 hover:bg-[#2e2e2e]"
-                            }`}
+                            className={`items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
+                                cmd.mobileOnly ? "flex md:hidden" : cmd.desktopOnly ? "hidden md:flex" : "flex"
+                              } ${
+                                isSel ? "bg-[#333333] text-white" : "text-gray-300 hover:bg-[#2e2e2e]"
+                              }`}
                           >
                             <div className="p-1.5 bg-white/5 rounded-lg">
                               <IconComponent size={16} className={cmd.iconColor} />
@@ -2678,7 +2720,7 @@ export default function Home() {
                       </div>
 
                       {/* User message actions */}
-                      <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1.5 mt-1.5 text-gray-400 text-xs transition-opacity pr-2">
+                      <div className="opacity-100 md:opacity-0 md:group-hover:opacity-100 flex items-center gap-1.5 mt-1.5 text-gray-400 text-xs transition-opacity pr-2">
                         <button
                           onClick={() => handleCopy(msg.id, msg.content)}
                           className="p-1 hover:text-white rounded hover:bg-white/10 transition-colors"
@@ -2870,7 +2912,9 @@ export default function Home() {
                         <button
                           key={cmd.id}
                           onClick={() => handleSelectCommand(cmd)}
-                          className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
+                          className={`items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
+                            cmd.mobileOnly ? "flex md:hidden" : cmd.desktopOnly ? "hidden md:flex" : "flex"
+                          } ${
                             isSel ? "bg-[#333333] text-white" : "text-gray-300 hover:bg-[#2e2e2e]"
                           }`}
                         >
