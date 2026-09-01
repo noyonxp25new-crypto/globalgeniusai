@@ -40,7 +40,7 @@ function checkSecurityViolation(message: string): boolean {
   return bannedKeywords.some((keyword) => lower.includes(keyword));
 }
 
-function detectMode(message: string): { mode: "image" | "code" | "think" | "text"; cleanPrompt: string } {
+function detectMode(message: string): { mode: "image" | "code" | "think" | "search" | "audio" | "text"; cleanPrompt: string } {
   const trimmed = message.trim();
   const lower = trimmed.toLowerCase();
 
@@ -57,6 +57,15 @@ function detectMode(message: string): { mode: "image" | "code" | "think" | "text
     const cleanPrompt = trimmed.replace(/^\/think\s*/i, "").trim();
     return { mode: "think", cleanPrompt };
   }
+  if (lower.startsWith("/search ") || lower === "/search") {
+    const cleanPrompt = trimmed.replace(/^\/search\s*/i, "").trim();
+    return { mode: "search", cleanPrompt };
+  }
+
+  if (lower.startsWith("/audio ") || lower === "/audio" || lower.startsWith("/music ") || lower === "/music") {
+    const cleanPrompt = trimmed.replace(/^\/(audio|music)\s*/i, "").trim() || "amar sonar bangla";
+    return { mode: "audio", cleanPrompt };
+  }
 
   // Automatic detection
   if (lower.match(/\b(image|picture|photo|draw|wallpaper|logo|ছবি|আঁক|generate image|make image|create image|draw a|make a photo)\b/)) {
@@ -64,6 +73,12 @@ function detectMode(message: string): { mode: "image" | "code" | "think" | "text
   }
   if (lower.match(/\b(code|script|function|program|algorithm|কোড|write code|coding|create app|component|html|css|python|javascript|react)\b/)) {
     return { mode: "code", cleanPrompt: trimmed };
+  }
+  if (lower.match(/\b(search|google|find on web|search the web|internet|খুঁজে বের কর|সার্চ কর)\b/)) {
+    return { mode: "search", cleanPrompt: trimmed };
+  }
+  if (lower.match(/\b(audio|music|mp3|গান|গান শোনাও|song|sing|voice|অডিও)\b/)) {
+    return { mode: "audio", cleanPrompt: trimmed };
   }
 
   return { mode: "text", cleanPrompt: trimmed };
@@ -186,7 +201,140 @@ export async function POST(req: Request) {
       }
     }
 
-    // 3. GENERAL TEXT / THINKING MODE (Groq Qwen with Identity & Security)
+    // 3. SEARCH MODE (Tavily Web Search + Groq Qwen)
+    if (mode === "search" && process.env.TAVILY_API_KEY) {
+      try {
+        const tavilyRes = await fetch("https://api.tavily.com/search", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            api_key: process.env.TAVILY_API_KEY,
+            query: cleanPrompt || "latest news",
+            search_depth: "basic",
+            include_answer: false,
+            include_images: false,
+            max_results: 5,
+          }),
+        });
+
+        let searchContext = "";
+        if (tavilyRes.ok) {
+          const data = await tavilyRes.json();
+          const results = data.results || [];
+          searchContext = results.map((r: any, i: number) => `[${i + 1}] Title: ${r.title}\nURL: ${r.url}\nContent: ${r.content}`).join("\n\n");
+        } else {
+          console.warn("Tavily API returned an error:", await tavilyRes.text());
+        }
+
+        const currentTime = new Date().toLocaleString("en-US", { timeZone: "Asia/Dhaka", dateStyle: "full", timeStyle: "short" });
+        const systemInstruction = `You are globalgeniusai, an expert news reporter and web researcher.
+Your task is to answer the user's query directly and intelligently using ONLY the provided Web Search Results. 
+IMPORTANT RULES:
+1. Provide the direct news/answer. Do NOT include any URLs, links, or sources in your response.
+2. Answer in Bengali (বাংলা) by default, unless the user explicitly asks for another language.
+3. Keep the answer structured, readable, and directly to the point.
+4. If the search results do not contain the answer, say you couldn't find enough information online.
+The current date and time is ${currentTime}.
+
+--- WEB SEARCH RESULTS ---
+${searchContext}
+--------------------------`;
+
+        const streamResponse = await groq.chat.completions.create({
+          messages: [
+            { role: "system", content: systemInstruction },
+            { role: "user", content: cleanPrompt || "Summarize the latest news." }
+          ],
+          model: "qwen/qwen3.8-27b",
+          stream: true,
+        });
+
+        const readableStream = new ReadableStream({
+          async start(controller) {
+            try {
+              for await (const chunk of streamResponse as any) {
+                const content = chunk.choices?.[0]?.delta?.content || "";
+                if (content) {
+                  controller.enqueue(new TextEncoder().encode(content));
+                }
+              }
+              controller.close();
+            } catch (err) {
+              controller.error(err);
+            }
+          },
+        });
+
+        return new Response(readableStream, {
+          headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+          },
+        });
+      } catch (err: any) {
+        console.warn("Tavily search error fallback:", err?.message);
+      }
+    }
+
+    // 4. AUDIO GENERATION MODE (ElevenLabs TTS)
+    if (mode === "audio" && process.env.ELEVENLABS_API_KEY) {
+      try {
+        const textToSpeak = cleanPrompt
+          .replace(/^(generate|make|create|sing|a|an|music|audio|song|mp3|গান|বানাও|বানা|গাও|আমাকে|একটি|শোনাও)\s*/gi, "")
+          .trim() || cleanPrompt;
+        
+        const elRes = await fetch("https://api.elevenlabs.io/v1/text-to-speech/hpp4J3VqNfWAUOO0d1Us", {
+          method: "POST",
+          headers: {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": process.env.ELEVENLABS_API_KEY,
+          },
+          body: JSON.stringify({
+            text: textToSpeak,
+            model_id: "eleven_multilingual_v2",
+            voice_settings: {
+              stability: 0.5,
+              similarity_boost: 0.75
+            }
+          }),
+        });
+
+        if (elRes.ok) {
+          const buffer = await elRes.arrayBuffer();
+          const base64Audio = Buffer.from(buffer).toString("base64");
+          const dataUri = `data:audio/mpeg;base64,${base64Audio}`;
+          
+          let audioUrl = dataUri;
+          // Upload to Cloudinary to get a clean URL (Cloudinary uses 'video' type for audio)
+          if (process.env.CLOUDINARY_CLOUD_NAME) {
+            const uploadRes = await cloudinary.uploader.upload(dataUri, {
+              folder: "globalgeniusai_audio",
+              resource_type: "video",
+            });
+            audioUrl = uploadRes.secure_url;
+          }
+
+          const responseText = `Here is your generated audio:\n\n<audio controls src="${audioUrl}"></audio>\n\n[Download MP3](${audioUrl})`;
+          
+          return new Response(responseText, {
+            headers: {
+              "Content-Type": "text/plain; charset=utf-8",
+              "Cache-Control": "no-cache",
+            },
+          });
+        } else {
+          console.warn("ElevenLabs Error:", await elRes.text());
+        }
+      } catch (err: any) {
+        console.warn("Audio generation error:", err?.message);
+      }
+    }
+
+    // 5. GENERAL TEXT / THINKING MODE (Groq Qwen with Identity & Security)
     const currentTime = new Date().toLocaleString("en-US", { timeZone: "Asia/Dhaka", dateStyle: "full", timeStyle: "short" });
     let systemInstruction = `You are globalgeniusai, an advanced, highly capable, and secure AI system.
 CRITICAL RULES ABOUT YOUR IDENTITY:

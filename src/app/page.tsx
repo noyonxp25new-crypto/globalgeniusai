@@ -180,6 +180,14 @@ const SLASH_COMMANDS: SlashCommand[] = [
     iconColor: "text-cyan-400",
   },
   {
+    id: "audio",
+    title: "Generate audio",
+    subtitle: "Convert text to MP3",
+    prefix: "/audio ",
+    icon: Mic,
+    iconColor: "text-pink-400",
+  },
+  {
     id: "temporary",
     title: "Temporary chat",
     subtitle: "Start a private session",
@@ -235,6 +243,7 @@ export default function Home() {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [editingChatId, setEditingChatId] = useState<string | null>(null);
   const [editChatTitle, setEditChatTitle] = useState("");
+  const [showImagesModal, setShowImagesModal] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -662,6 +671,22 @@ export default function Home() {
     setInput("");
     setShowSlashMenu(false);
     setAttachedImage(null);
+  };
+
+  const getAllGeneratedImages = () => {
+    const images: { url: string; prompt: string; convId: string }[] = [];
+    conversations.forEach((conv) => {
+      conv.messages.forEach((msg) => {
+        if (msg.role === "assistant") {
+          const regex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+          let match;
+          while ((match = regex.exec(msg.content)) !== null) {
+            images.push({ prompt: match[1], url: match[2], convId: conv.id });
+          }
+        }
+      });
+    });
+    return images;
   };
 
   // Delete Conversation
@@ -1209,6 +1234,39 @@ export default function Home() {
         </div>
       )}
 
+        {/* ================= IMAGES MODAL ================= */}
+      {showImagesModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="relative w-full max-w-4xl bg-[#1e1e1e] border border-white/10 rounded-3xl p-6 shadow-2xl animate-fade-in flex flex-col max-h-[80vh]">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <ImageIcon className="text-purple-400" />
+                Generated Images
+              </h2>
+              <button onClick={() => setShowImagesModal(false)} className="p-2 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto pr-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {(() => {
+                  const imgs = getAllGeneratedImages();
+                  if (imgs.length === 0) return <div className="col-span-full text-center text-gray-500 py-10">No generated images yet. Create one with /image!</div>;
+                  return imgs.map((img, i) => (
+                    <div key={i} className="group relative aspect-square rounded-xl overflow-hidden bg-white/5 border border-white/10 cursor-pointer" onClick={() => { setActiveConvId(img.convId); setShowImagesModal(false); }}>
+                      <img src={img.url} alt={img.prompt} className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110" />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
+                        <p className="text-white text-[10px] font-medium line-clamp-2">{img.prompt}</p>
+                      </div>
+                    </div>
+                  ));
+                })()}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ================= UPGRADE POPUP MODAL ================= */}
       {showUpgradeModal && !isProUser && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
@@ -1483,29 +1541,25 @@ export default function Home() {
             </Link>
           )}
 
-          <button className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
+          <button onClick={() => setShowImagesModal(true)} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
             <ImageIcon size={15} className="text-gray-400" />
             <span>Images</span>
           </button>
-          <button className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
+          <button onClick={() => showToast("Coming soon")} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
             <Folder size={15} className="text-gray-400" />
             <span>Library</span>
           </button>
-          <button className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
+          <button onClick={() => showToast("Coming soon")} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
             <Calendar size={15} className="text-gray-400" />
             <span>Scheduled</span>
           </button>
-          <button className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
+          <button onClick={() => showToast("Coming soon")} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
             <Sliders size={15} className="text-gray-400" />
             <span>Plugins</span>
           </button>
-          <button className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
+          <button onClick={() => showToast("Coming soon")} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
             <Layers size={15} className="text-gray-400" />
             <span>Projects</span>
-          </button>
-          <button className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
-            <Terminal size={15} className="text-gray-400" />
-            <span>Codex</span>
           </button>
         </div>
 
@@ -1515,7 +1569,7 @@ export default function Home() {
             <span>Recents</span>
             <div className="flex items-center gap-1">
               <span className={`w-1.5 h-1.5 rounded-full ${firebaseConnected ? "bg-emerald-400 animate-pulse" : "bg-gray-500"}`} />
-              <span className="text-[9px] lowercase text-gray-400">{currentUser ? "firebase" : "local"}</span>
+              <span className="text-[9px] font-bold text-emerald-400">ACTIVE</span>
             </div>
           </div>
 
