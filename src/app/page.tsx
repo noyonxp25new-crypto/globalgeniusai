@@ -298,6 +298,7 @@ export default function Home() {
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+    const photoInputRef = useRef<HTMLInputElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
 
   const activeConversation = conversations.find((c) => c.id === activeConvId);
@@ -962,6 +963,7 @@ export default function Home() {
       if (file.size > 10 * 1024 * 1024) {
         showToast("File size should be less than 10MB");
         if (fileInputRef.current) fileInputRef.current.value = '';
+            if (photoInputRef.current) photoInputRef.current.value = '';
         return;
       }
 
@@ -994,6 +996,7 @@ export default function Home() {
           } finally {
             setIsUploadingImage(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
+            if (photoInputRef.current) photoInputRef.current.value = '';
           }
         };
         reader.readAsDataURL(file);
@@ -1021,6 +1024,7 @@ export default function Home() {
         } finally {
           setIsUploadingImage(false);
           if (fileInputRef.current) fileInputRef.current.value = '';
+            if (photoInputRef.current) photoInputRef.current.value = '';
         }
       }
     };
@@ -1822,7 +1826,8 @@ export default function Home() {
       )}
 
       {/* Hidden File Input */}
-      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,application/pdf,text/plain,.csv,.md,.json" className="hidden" />
+      <input type="file" ref={photoInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+        <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="application/pdf,text/plain,.csv,.md,.json" className="hidden" />
         <input type="file" ref={cameraInputRef} onChange={handleCameraCapture} accept="image/*" capture="environment" className="hidden" />
 
       {/* ================= LEFT SIDEBAR ================= */}
