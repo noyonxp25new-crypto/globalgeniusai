@@ -27,7 +27,10 @@ const auth = getAuth(app);
 
 let db: Firestore;
 try {
-  db = initializeFirestore(app, { ignoreUndefinedProperties: true });
+  db = initializeFirestore(app, { 
+    ignoreUndefinedProperties: true,
+    experimentalForceLongPolling: true 
+  });
 } catch (e) {
   db = getFirestore(app);
 }

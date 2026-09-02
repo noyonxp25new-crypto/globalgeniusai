@@ -632,7 +632,7 @@ export default function AdminPage() {
       {showAddUserModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="relative w-full max-w-md bg-[#1e1e1e] border border-white/15 rounded-3xl p-6 shadow-2xl animate-fade-in">
-            <button
+            <button type="button"
               onClick={() => setShowAddUserModal(false)}
               className="absolute top-4 right-4 p-2 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors"
             >
@@ -729,7 +729,7 @@ export default function AdminPage() {
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3">
-          <button
+          <button type="button"
             onClick={() => {
               fetchAdminData();
               showToast("Refreshed with Firebase Authentication! ⚡");
@@ -742,7 +742,7 @@ export default function AdminPage() {
             <span className="hidden sm:inline">Refresh Data</span>
           </button>
 
-          <button
+          <button type="button"
             onClick={() => setShowAddUserModal(true)}
             className="px-2 py-1.5 sm:px-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-[10px] sm:text-xs rounded-xl transition-all shadow-md flex items-center gap-1.5"
           >
@@ -751,7 +751,7 @@ export default function AdminPage() {
             <span className="sm:hidden">Add User</span>
           </button>
 
-          <button
+          <button type="button"
             onClick={() => {
               signOut(auth).catch(() => {});
               setIsAdmin(false);
@@ -1019,7 +1019,7 @@ export default function AdminPage() {
                             placeholder="±"
                             className="w-12 bg-[#2a2a2a] text-white border border-white/10 rounded-lg px-2 py-1 text-xs focus:outline-none"
                           />
-                          <button
+                          <button type="button"
                             onClick={() => handleAddCredits(user)}
                             className="p-1 bg-[#333] hover:bg-blue-600 rounded-lg transition-colors text-white"
                             title="Add/Deduct Credits"
@@ -1032,7 +1032,7 @@ export default function AdminPage() {
                       <td className="p-3.5 text-right space-x-1.5">
                         {/* 1. Toggle Admin Role Button */}
                         {user.email.toLowerCase() !== ROOT_ADMIN_EMAIL.toLowerCase() && (
-                          <button
+                          <button type="button"
                             onClick={() => handleToggleAdminRole(user)}
                             className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1 ${
                               user.role === "admin"
@@ -1048,7 +1048,7 @@ export default function AdminPage() {
 
                         {/* 2. Upgrade / Downgrade Plan Button */}
                         {user.email.toLowerCase() !== ROOT_ADMIN_EMAIL.toLowerCase() && (
-                          <button
+                          <button type="button"
                             onClick={() => handleToggleUpgrade(user)}
                             className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1 ${
                               user.tier === "pro"
@@ -1064,7 +1064,7 @@ export default function AdminPage() {
 
                         {/* 3. Ban / Unban Button */}
                         {user.email.toLowerCase() !== ROOT_ADMIN_EMAIL.toLowerCase() && (
-                          <button
+                          <button type="button"
                             onClick={() => handleToggleBan(user)}
                             className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all inline-flex items-center gap-1 ${
                               user.isBanned
@@ -1080,7 +1080,7 @@ export default function AdminPage() {
 
                         {/* 4. Delete User */}
                         {user.email.toLowerCase() !== ROOT_ADMIN_EMAIL.toLowerCase() && (
-                          <button
+                          <button type="button"
                             onClick={() => handleDeleteUser(user.uid, user.email)}
                             className="p-1.5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-lg transition-colors inline-flex items-center"
                             title="Delete user"
@@ -1104,7 +1104,7 @@ export default function AdminPage() {
               <ShieldCheck size={18} className="text-emerald-400" />
               <h3 className="text-base font-bold text-white">Admin Audit Log</h3>
             </div>
-            <button
+            <button type="button"
               onClick={() => setShowAuditLog(!showAuditLog)}
               className="text-xs text-blue-400 hover:text-blue-300 font-medium"
             >

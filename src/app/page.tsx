@@ -56,9 +56,18 @@ import {
   AlertCircle,
   Pin,
   PinOff,
-  Link2
+  Link2,
+  Video,
+  Hexagon,
+  Shapes
 } from "lucide-react";
 import Link from "next/link";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/cjs/styles/prism";
+import NewsSection from "../components/NewsSection";
+import ImageWithShimmer from "../components/ImageWithShimmer";
 import {
   db,
   auth,
@@ -207,6 +216,30 @@ const SLASH_COMMANDS: SlashCommand[] = [
     icon: Code,
     iconColor: "text-emerald-400",
   },
+  {
+    id: "canvas",
+    title: "Canvas",
+    subtitle: "Code, write, or make slides",
+    prefix: "/canvas ",
+    icon: PenLine,
+    iconColor: "text-orange-400",
+  },
+  {
+    id: "video",
+    title: "Generate Video",
+    subtitle: "Create video with AI",
+    prefix: "/video ",
+    icon: Video,
+    iconColor: "text-rose-500",
+  },
+  {
+    id: "study",
+    title: "Guided Learning",
+    subtitle: "Study and learn new things",
+    prefix: "/study ",
+    icon: Book,
+    iconColor: "text-indigo-400",
+  },
   
   {
     id: "think",
@@ -280,13 +313,21 @@ export default function Home() {
   const [activeReplyMenuId, setActiveReplyMenuId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
+  // Fix hydration mismatch: safely handle window size on client side only
+  useEffect(() => {
+    if (window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
+  }, []);
   const [isListening, setIsListening] = useState(false);
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
   const [showSlashMenu, setShowSlashMenu] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isThinkingMode, setIsThinkingMode] = useState(false);
-  const [topTab, setTopTab] = useState<"chat" | "work">("chat");
+  const [topTab, setTopTab] = useState<"chat" | "work" | "news">("chat");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
@@ -301,11 +342,14 @@ export default function Home() {
   const [editChatTitle, setEditChatTitle] = useState("");
   const [showImagesModal, setShowImagesModal] = useState(false);
   const [shareContent, setShareContent] = useState<string | null>(null);
+  const [isCanvasOpen, setIsCanvasOpen] = useState(false);
+  const [canvasContent, setCanvasContent] = useState<string | null>(null);
     const [editingImageUrl, setEditingImageUrl] = useState<string | null>(null);
     const [editImagePrompt, setEditImagePrompt] = useState("");
   const [chatSearchQuery, setChatSearchQuery] = useState("");
   const [isPrivateMode, setIsPrivateMode] = useState(false);
   const [showScheduled, setShowScheduled] = useState(false);
+  const [showArtifacts, setShowArtifacts] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [libraryTab, setLibraryTab] = useState<"All" | "Images" | "Documents">("All");
   const [scheduledInput, setScheduledInput] = useState("");
@@ -754,6 +798,33 @@ export default function Home() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
+  // Direct image download — works on both mobile & PC
+  const downloadImage = async (url: string, filename?: string) => {
+    const name = filename || `globalgeniusai-image-${Date.now()}.png`;
+    try {
+      const response = await fetch(url, { mode: "cors" });
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      showToast("Download started!");
+    } catch {
+      // Fallback for CORS-restricted URLs
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.target = "_blank";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  };
+
   // Like / Dislike toggle
   const handleRate = (msgId: string, liked: boolean) => {
     setConversations((prev) =>
@@ -829,7 +900,7 @@ export default function Home() {
   };
 
   const handleNewChat = () => {
-    setShowScheduled(false); setShowLibrary(false);
+    setShowScheduled(false); setShowLibrary(false); setShowArtifacts(false);
     const newId = "conv-" + Date.now();
     const newConv: Conversation = {
       id: newId,
@@ -1142,6 +1213,13 @@ export default function Home() {
     if (!updatedConv.isPrivate) {
       saveConversationToFirestore(updatedConv);
     }
+    // Detect image generation to show special animation
+    const lowerPrompt = textToSend.toLowerCase();
+    const isImagePrompt =
+      /\b(image|picture|pic|photo|draw|wallpaper|logo|generate image|make image|create image|draw a|make a photo)\b/i.test(lowerPrompt) ||
+      /(ছবি|আঁকা|আঁক|ছবি তৈরি|ছবি বানাও|chobi|choby|aka|akbo)/i.test(lowerPrompt) ||
+      /^\/image/i.test(lowerPrompt); // matches /image, /image tiger, /imageবাঘ
+    setIsGeneratingImage(isImagePrompt);
     setIsLoading(true);
 
     abortControllerRef.current = new AbortController();
@@ -1163,6 +1241,7 @@ export default function Home() {
       }
 
       setIsLoading(false);
+      setIsGeneratingImage(false);
 
       const aiMsgId = "ai-" + Date.now();
       const newAiMsg: Message = {
@@ -1228,10 +1307,12 @@ export default function Home() {
       if (error.name === "AbortError") {
         console.warn("Fetch aborted due to ban.");
         setIsLoading(false);
+        setIsGeneratingImage(false);
         return;
       }
       console.error("Chat Error:", error);
       setIsLoading(false);
+      setIsGeneratingImage(false);
       const errorMsgId = "err-" + Date.now();
       const errorConv: Conversation = {
         ...updatedConv,
@@ -1293,86 +1374,121 @@ export default function Home() {
       handleSendMessage();
     }
   };
-
   // Markdown & Code & Image Parser
   const renderMessageContent = (content: string) => {
-    if (content.includes("```")) {
-      const parts = content.split(/(```[\s\S]*?```)/g);
-      return parts.map((part, index) => {
-        if (part.startsWith("```") && part.endsWith("```")) {
-          const lines = part.slice(3, -3).trim().split("\n");
-          const language = lines[0].trim() || "code";
-          const codeBody = lines.slice(language ? 1 : 0).join("\n");
-          const blockId = `code-${index}-${Math.random()}`;
-
-          return (
-            <div key={index} className="my-4 rounded-xl overflow-hidden border border-white/15 bg-[#141414]">
-              <div className="flex items-center justify-between px-4 py-2 bg-[#212121] text-xs text-gray-400 border-b border-white/10 font-mono">
-                <span className="font-semibold text-gray-300 uppercase">{language}</span>
-                <button
-                  onClick={() => handleCopy(blockId, codeBody)}
-                  className="flex items-center gap-1.5 hover:text-white transition-colors"
-                >
-                  {copiedId === blockId ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
-                  <span>{copiedId === blockId ? "Copied" : "Copy code"}</span>
-                </button>
-              </div>
-              <pre className="p-4 text-sm font-mono overflow-x-auto text-emerald-300 leading-relaxed">
-                <code>{codeBody}</code>
-              </pre>
-            </div>
-          );
-        }
-
-        return renderTextAndImages(part, index);
-      });
+    const canvasMatch = content.match(/<canvas_content>([\s\S]*?)<\/canvas_content>/);
+    let displayContent = content;
+    let canvasData: string | null = null;
+    
+    if (canvasMatch) {
+      canvasData = canvasMatch[1].trim();
+      displayContent = content.replace(canvasMatch[0], "").trim();
     }
 
-    return renderTextAndImages(content, 0);
-  };
+    return (
+      <div className="prose prose-invert max-w-none prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent">
+        {displayContent && (
+          <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+          code({ node, inline, className, children, ...props }: any) {
+            const match = /language-(\w+)/.exec(className || "");
+            const language = match ? match[1] : "code";
+            const codeBody = String(children).replace(/\n$/, "");
+            const blockId = `code-${Math.random()}`;
 
-  const renderTextAndImages = (text: string, baseKey: number) => {
-    const parts = text.split(/(!\[.*?\]\(.*?\))/g);
-    return parts.map((part, i) => {
-      const match = part.match(/!\[(.*?)\]\((.*?)\)/);
-      if (match) {
-        const alt = match[1];
-        const url = match[2];
-        return (
-          <div key={`${baseKey}-${i}`} className="my-4 group relative inline-block max-w-full">
-            <div className="rounded-2xl overflow-hidden border border-white/15 shadow-2xl bg-black/40">
-              <img
-                src={url}
-                alt={alt}
-                className="max-h-[420px] w-auto max-w-full object-cover rounded-2xl cursor-pointer hover:scale-[1.01] transition-transform duration-200"
-                onClick={() => setPreviewImage(url)}
-                loading="lazy"
-              />
-            </div>
-            <div className="mt-2 flex items-center justify-between px-1 text-xs text-gray-400">
-              <span className="truncate max-w-[280px] italic">"{alt}"</span>
-              <div className="flex items-center gap-2">
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="p-1.5 hover:bg-white/10 rounded-lg hover:text-white transition-colors flex items-center gap-1"
-                >
-                  <Download size={13} />
-                  <span>Download</span>
-                </a>
+            if (!inline) {
+              return (
+                <div className="my-4 rounded-xl overflow-hidden border border-white/15 bg-[#141414]">
+                  <div className="flex items-center justify-between px-4 py-2 bg-[#212121] text-xs text-gray-400 border-b border-white/10 font-mono">
+                    <span className="font-semibold text-gray-300 uppercase">{language}</span>
+                    <button type="button"
+                      onClick={() => handleCopy(blockId, codeBody)}
+                      className="flex items-center gap-1.5 hover:text-white transition-colors"
+                    >
+                      {copiedId === blockId ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                      <span>{copiedId === blockId ? "Copied" : "Copy code"}</span>
+                    </button>
+                  </div>
+                  <SyntaxHighlighter
+                    style={vscDarkPlus}
+                    language={language}
+                    PreTag="div"
+                    className="!my-0 !p-4 !bg-transparent text-sm"
+                    {...props}
+                  >
+                    {codeBody}
+                  </SyntaxHighlighter>
+                </div>
+              );
+            }
+            return (
+              <code className="bg-white/10 px-1.5 py-0.5 rounded text-sm text-pink-300 font-mono" {...props}>
+                {children}
+              </code>
+            );
+          },
+          img({ node, src, alt, ...props }: any) {
+            return (
+              <ImageWithShimmer src={src} alt={alt} onDownload={downloadImage} onPreview={setPreviewImage} />
+            );
+          },
+          // Fix: ReactMarkdown wraps images in <p> which causes invalid HTML nesting with divs
+          // If the paragraph only contains image(s), render a div instead
+          p({ node, children, ...props }: any) {
+            const hasImageChild = node?.children?.some(
+              (child: any) => child.type === "element" && child.tagName === "img"
+            );
+            if (hasImageChild) {
+              return <div {...props}>{children}</div>;
+            }
+            return <p {...props}>{children}</p>;
+          },
+          a({ node, href, children, ...props }: any) {
+            return (
+              <a href={href} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline" {...props}>
+                {children}
+              </a>
+            );
+          },
+          table({ node, ...props }: any) {
+            return (
+              <div className="overflow-x-auto my-6 border border-white/10 rounded-lg">
+                <table className="w-full text-sm text-left" {...props} />
               </div>
-            </div>
+            );
+          },
+          th({ node, ...props }: any) {
+            return <th className="bg-white/5 px-4 py-3 font-semibold text-gray-200" {...props} />;
+          },
+          td({ node, ...props }: any) {
+            return <td className="px-4 py-3 border-t border-white/5" {...props} />;
+          }
+        }}
+      >
+        {displayContent}
+      </ReactMarkdown>
+      )}
+      {canvasData && (
+          <div className="mt-4 p-4 rounded-xl border border-orange-500/30 bg-orange-500/10 flex flex-col items-start gap-3">
+             <div className="flex items-center gap-2 text-orange-400 font-semibold">
+               <PenLine size={18} />
+               <span>Canvas Generated</span>
+             </div>
+             <p className="text-sm text-gray-300">I have generated the content in a dedicated canvas.</p>
+             <button type="button"
+               onClick={() => {
+                 setCanvasContent(canvasData);
+                 setIsCanvasOpen(true);
+               }}
+               className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-orange-500/20 flex items-center gap-2"
+             >
+               View in Canvas
+             </button>
           </div>
-        );
-      }
-
-      let formatted = part
-        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-        .replace(/\*(.*?)\*/g, "<em>$1</em>");
-
-      return <span key={`${baseKey}-${i}`} dangerouslySetInnerHTML={{ __html: formatted }} />;
-    });
+        )}
+      </div>
+    );
   };
 
   // Reusable Chat Input Bar Component
@@ -1550,7 +1666,7 @@ export default function Home() {
           <div className="relative w-full max-w-sm bg-[#222222] border border-white/10 rounded-2xl p-5 shadow-2xl animate-fade-in flex flex-col">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-lg font-semibold text-white">Share</h2>
-              <button onClick={() => setShareContent(null)} className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+              <button type="button" onClick={() => setShareContent(null)} className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
                 <X size={16} />
               </button>
             </div>
@@ -1560,7 +1676,7 @@ export default function Home() {
             </div>
             
             <div className="flex items-center justify-center gap-6">
-              <button onClick={() => {
+              <button type="button" onClick={() => {
                 navigator.clipboard.writeText(shareContent || "");
                 showToast("Link copied to clipboard");
                 setShareContent(null);
@@ -1571,7 +1687,7 @@ export default function Home() {
                 <span className="text-[11px] text-gray-400 group-hover:text-white transition-colors">Copy link</span>
               </button>
               
-              <button onClick={() => {
+              <button type="button" onClick={() => {
                 window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareContent || "")}`, "_blank");
                 setShareContent(null);
               }} className="flex flex-col items-center gap-2 group">
@@ -1581,7 +1697,7 @@ export default function Home() {
                 <span className="text-[11px] text-gray-400 group-hover:text-white transition-colors">X</span>
               </button>
               
-              <button onClick={() => {
+              <button type="button" onClick={() => {
                 window.open("https://linkedin.com", "_blank");
                 setShareContent(null);
               }} className="flex flex-col items-center gap-2 group">
@@ -1591,7 +1707,7 @@ export default function Home() {
                 <span className="text-[11px] text-gray-400 group-hover:text-white transition-colors">LinkedIn</span>
               </button>
 
-              <button onClick={() => {
+              <button type="button" onClick={() => {
                 window.open("https://reddit.com", "_blank");
                 setShareContent(null);
               }} className="flex flex-col items-center gap-2 group">
@@ -1599,6 +1715,27 @@ export default function Home() {
                   <MessageSquare size={20} />
                 </div>
                 <span className="text-[11px] text-gray-400 group-hover:text-white transition-colors">Reddit</span>
+              </button>
+              
+              <button type="button" onClick={async () => {
+                try {
+                  if (navigator.share) {
+                    await navigator.share({
+                      title: "Global Genius AI",
+                      text: shareContent || ""
+                    });
+                  } else {
+                    showToast("Sharing options not supported on this browser.");
+                  }
+                } catch (err) {
+                  console.error("Error sharing:", err);
+                }
+                setShareContent(null);
+              }} className="flex flex-col items-center gap-2 group">
+                <div className="w-12 h-12 rounded-full bg-gray-700 flex items-center justify-center text-white group-hover:scale-105 transition-transform">
+                  <MoreHorizontal size={20} />
+                </div>
+                <span className="text-[11px] text-gray-400 group-hover:text-white transition-colors">More</span>
               </button>
             </div>
             <div className="mt-6 flex justify-end items-center">
@@ -1617,7 +1754,7 @@ export default function Home() {
                 <ImageIcon className="text-purple-400" />
                 Generated Images
               </h2>
-              <button onClick={() => setShowImagesModal(false)} className="p-2 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+              <button type="button" onClick={() => setShowImagesModal(false)} className="p-2 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
                 <X size={20} />
               </button>
             </div>
@@ -1645,7 +1782,7 @@ export default function Home() {
       {showUpgradeModal && !isProUser && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="relative w-full max-w-md bg-[#1e1e1e] border border-amber-500/30 rounded-3xl p-6 shadow-2xl animate-fade-in text-center">
-            <button
+            <button type="button"
               onClick={() => setShowUpgradeModal(false)}
               className="absolute top-4 right-4 p-2 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors"
             >
@@ -1676,7 +1813,7 @@ export default function Home() {
               </div>
             </div>
 
-            <button
+            <button type="button"
               onClick={() => {
                 showToast("Please contact Administrator (noyonxp25@gmail.com) for Pro Activation 👑");
                 setShowUpgradeModal(false);
@@ -1693,7 +1830,7 @@ export default function Home() {
       {showAuthModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
           <div className="relative w-full max-w-md bg-[#1e1e1e] border border-white/15 rounded-3xl p-6 shadow-2xl animate-fade-in">
-            <button
+            <button type="button"
               onClick={() => setShowAuthModal(false)}
               className="absolute top-4 right-4 p-2 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition-colors"
             >
@@ -1844,7 +1981,7 @@ export default function Home() {
           onClick={() => setPreviewImage(null)}
         >
           <div className="relative max-w-4xl max-h-[90vh] bg-[#1a1a1a] p-2 rounded-2xl border border-white/20">
-            <button
+            <button type="button"
               onClick={() => setPreviewImage(null)}
               className="absolute top-4 right-4 p-2 bg-black/60 hover:bg-black text-white rounded-full transition-colors z-10"
             >
@@ -1870,7 +2007,7 @@ export default function Home() {
             <div className="relative w-full max-w-lg bg-[#222222] border border-white/10 rounded-2xl p-5 shadow-2xl animate-fade-in flex flex-col">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2"><Edit3 size={18} className="text-blue-400" /> Edit Image</h2>
-                <button onClick={() => { setEditingImageUrl(null); setEditImagePrompt(""); }} className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+                <button type="button" onClick={() => { setEditingImageUrl(null); setEditImagePrompt(""); }} className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
                   <X size={16} />
                 </button>
               </div>
@@ -1907,7 +2044,7 @@ export default function Home() {
                   className="w-full bg-[#111111] text-white px-4 py-3 rounded-xl border border-white/10 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none text-sm pr-12 transition-all"
                   autoFocus
                 />
-                <button 
+                <button type="button" 
                   onClick={async () => {
                     if (!editImagePrompt.trim()) return;
                     const prompt = editImagePrompt.trim();
@@ -1941,13 +2078,13 @@ export default function Home() {
           <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4">
             <img src={cameraPreviewImage} alt="Camera capture" className="max-w-full max-h-[70vh] rounded-2xl shadow-2xl mb-8 object-contain" />
             <div className="flex items-center gap-8">
-              <button 
+              <button type="button" 
                 onClick={() => setCameraPreviewImage(null)}
                 className="w-14 h-14 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center text-red-400 transition-colors"
               >
                 <X size={32} />
               </button>
-              <button 
+              <button type="button" 
                 onClick={() => {
                   setAttachedImage(cameraPreviewImage);
                   setCameraPreviewImage(null);
@@ -1975,12 +2112,12 @@ export default function Home() {
         {/* Sidebar Header */}
         <div className="p-3.5 flex items-center justify-between">
           <div className="flex items-center gap-2 font-bold text-[17px] tracking-tight px-2 text-white">
-            <Sparkles size={17} className="text-blue-400" />
+            <img src="/logo.jpeg" alt="Global Genius AI" className="h-6 w-6 rounded-full object-cover" />
             <span className="bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">
               globalgeniusai
             </span>
           </div>
-          <button
+          <button type="button"
             onClick={() => setIsSidebarOpen(false)}
             className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
             title="Close sidebar"
@@ -2005,7 +2142,7 @@ export default function Home() {
 
         {/* New Chat Button */}
         <div className="px-3 pb-2">
-          <button
+          <button type="button"
             onClick={handleNewChat}
             className="flex items-center justify-between w-full rounded-xl px-3 py-2.5 text-sm bg-transparent hover:bg-white/10 text-gray-200 transition-colors border border-white/10 font-medium"
           >
@@ -2029,20 +2166,29 @@ export default function Home() {
             </Link>
           )}
 
-          <button onClick={() => setShowImagesModal(true)} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
+          <button type="button" onClick={() => { setTopTab("news"); setIsSidebarOpen(false); setShowScheduled(false); setShowLibrary(false); }} className={`flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors ${topTab === "news" ? "bg-white/10 text-white" : ""}`}>
+            <Globe size={15} className={topTab === "news" ? "text-white" : "text-gray-400"} />
+            <span className={topTab === "news" ? "font-medium" : ""}>News</span>
+          </button>
+          <button type="button" onClick={() => { setShowImagesModal(true); if (window.innerWidth < 768) setIsSidebarOpen(false); }} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
             <ImageIcon size={15} className="text-gray-400" />
             <span>Images</span>
           </button>
-          <button onClick={() => setShowLibrary(true)} className={`flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors ${showLibrary ? "bg-white/10 text-white" : ""}`}>
+          <button type="button" onClick={() => { setShowLibrary(true); setShowScheduled(false); setShowArtifacts(false); if (window.innerWidth < 768) setIsSidebarOpen(false); }} className={`flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors ${showLibrary ? "bg-white/10 text-white" : ""}`}>
             <Folder size={15} className={showLibrary ? "text-white" : "text-gray-400"} />
             <span className={showLibrary ? "font-medium" : ""}>Library</span>
           </button>
-          <button onClick={() => setShowScheduled(true)} className={`flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors ${showScheduled ? "bg-white/10 text-white" : ""}`}>
+          <button type="button" onClick={() => { setShowScheduled(true); setShowLibrary(false); setShowArtifacts(false); if (window.innerWidth < 768) setIsSidebarOpen(false); }} className={`flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors ${showScheduled ? "bg-white/10 text-white" : ""}`}>
             <Calendar size={15} className={showScheduled ? "text-white" : "text-gray-400"} />
             <span className={showScheduled ? "font-medium" : ""}>Scheduled</span>
           </button>
 
-          <button onClick={() => setShowProjectsModal(true)} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
+          <button type="button" onClick={() => { setShowArtifacts(true); setShowLibrary(false); setShowScheduled(false); if (window.innerWidth < 768) setIsSidebarOpen(false); }} className={`flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors ${showArtifacts ? "bg-white/10 text-white" : ""}`}>
+            <Hexagon size={15} className={showArtifacts ? "text-white" : "text-gray-400"} />
+            <span className={showArtifacts ? "font-medium" : ""}>Artifacts</span>
+          </button>
+
+          <button type="button" onClick={() => { setShowProjectsModal(true); if (window.innerWidth < 768) setIsSidebarOpen(false); }} className="flex items-center gap-3 w-full px-3 py-2 rounded-lg hover:bg-white/10 transition-colors">
             <Layers size={15} className="text-gray-400" />
             <span>Projects</span>
           </button>
@@ -2098,7 +2244,7 @@ export default function Home() {
                 {!isEditing && (
                   <div className="absolute right-2 flex items-center opacity-100">
                     <div className="w-4 h-full absolute -left-4 bg-gradient-to-r from-transparent to-[#171717] group-hover:to-[#222222]" />
-                    <button
+                    <button type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         setOpenMenuId(openMenuId === c.id ? null : c.id);
@@ -2113,14 +2259,14 @@ export default function Home() {
 
                 {openMenuId === c.id && (
                   <div className="absolute right-0 top-full mt-1 w-36 bg-[#262626] border border-white/10 rounded-xl shadow-xl z-50 overflow-hidden text-gray-300 py-1">
-                    <button
+                    <button type="button"
                       onClick={(e) => handleTogglePin(e, c.id)}
                       className="flex items-center gap-2.5 w-full px-3 py-2 hover:bg-white/10 transition-colors text-left"
                     >
                       {c.isPinned ? <PinOff size={13} /> : <Pin size={13} />}
                       <span>{c.isPinned ? "Unpin" : "Pin"}</span>
                     </button>
-                    <button
+                    <button type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setEditingChatId(c.id);
@@ -2132,7 +2278,7 @@ export default function Home() {
                         <Edit3 size={13} />
                         <span>Rename</span>
                       </button>
-                      <button
+                      <button type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setMoveToChatId(c.id);
@@ -2143,7 +2289,7 @@ export default function Home() {
                         <Folder size={13} />
                         <span>Move to Project</span>
                       </button>
-                    <button
+                    <button type="button"
                       onClick={(e) => {
                           e.stopPropagation();
                           setShareContent(`Check out my chat on globalgeniusai: https://globalgeniusai.com/chat/${c.id}`);
@@ -2155,7 +2301,7 @@ export default function Home() {
                       <span>Share</span>
                     </button>
                     <div className="h-px bg-white/10 my-1 w-full" />
-                    <button
+                    <button type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         setOpenMenuId(null);
@@ -2199,7 +2345,7 @@ export default function Home() {
                   )}
 
                   {!isProUser && (
-                    <button
+                    <button type="button"
                       onClick={() => {
                         setShowUserMenu(false);
                         setShowUpgradeModal(true);
@@ -2211,7 +2357,7 @@ export default function Home() {
                     </button>
                   )}
 
-                  <button
+                  <button type="button"
                     onClick={handleSignOut}
                     className="flex items-center gap-2.5 w-full px-3 py-2 rounded-xl hover:bg-red-500/10 text-xs text-red-400 transition-colors"
                   >
@@ -2246,7 +2392,7 @@ export default function Home() {
 
                 {/* Hide upgrade button for PRO users */}
                 {!isProUser && (
-                  <button
+                  <button type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setShowUpgradeModal(true);
@@ -2261,7 +2407,7 @@ export default function Home() {
           ) : (
             // LOGGED OUT STATE
             <div className="space-y-2">
-              <button
+              <button type="button"
                 onClick={() => {
                   setAuthMode("login");
                   setShowAuthModal(true);
@@ -2271,7 +2417,7 @@ export default function Home() {
                 <LogIn size={14} />
                 <span>Log in</span>
               </button>
-              <button
+              <button type="button"
                 onClick={() => {
                   setAuthMode("signup");
                   setShowAuthModal(true);
@@ -2292,7 +2438,7 @@ export default function Home() {
         <header className="h-14 flex items-center justify-between px-2 sm:px-4 border-b border-white/5 sticky top-0 bg-[#212121]/90 backdrop-blur-md z-10 relative">
             <div className="flex items-center gap-2 sm:gap-3 z-10">
               {!isSidebarOpen && (
-                <button
+                <button type="button"
                   onClick={() => setIsSidebarOpen(true)}
                   className="p-1.5 sm:p-2 hover:bg-white/10 rounded-lg text-gray-300 transition-colors"
                   title="Open sidebar"
@@ -2302,8 +2448,9 @@ export default function Home() {
               )}
               {/* Logo / Dropdown Title on the left like ChatGPT */}
               <div className="flex items-center gap-1 font-bold text-gray-200 text-sm sm:text-base cursor-pointer hover:text-white transition-colors">
+                <img src="/logo.jpeg" alt="Global Genius AI" className="h-5 w-5 sm:h-6 sm:w-6 rounded-full object-cover mr-1" />
                 <span>globalgeniusai</span>
-                <ChevronDown size={14} className="text-gray-400" />
+                <ChevronDown size={14} className="hidden sm:block text-gray-400" />
               </div>
             </div>
 
@@ -2315,8 +2462,8 @@ export default function Home() {
           )}
 
           {/* Center Chat / Work Tab Switcher */}
-          <div className="hidden md:flex items-center bg-[#171717] p-0.5 rounded-full border border-white/10 flex-shrink-0">
-            <button
+          <div className="flex items-center bg-[#171717] p-0.5 rounded-full border border-white/10 flex-shrink-0">
+            <button type="button"
               onClick={() => setTopTab("chat")}
               className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
                 topTab === "chat" ? "bg-[#2f2f2f] text-white shadow-sm" : "text-gray-400 hover:text-gray-200"
@@ -2324,12 +2471,22 @@ export default function Home() {
             >
               Chat
             </button>
-            <button
+            <button type="button"
+              onClick={() => {
+                setTopTab("news");
+              }}
+              className={`px-3 py-1 text-xs font-medium rounded-full transition-colors flex items-center gap-1 ${
+                topTab === "news" ? "bg-[#2f2f2f] text-white shadow-sm" : "text-gray-400 hover:text-gray-200"
+              }`}
+            >
+              News
+            </button>
+            <button type="button"
               onClick={() => {
                 setTopTab("work");
                 showToast("Work & Workspace mode active");
               }}
-              className={`px-3 py-1 text-xs font-medium rounded-full transition-colors flex items-center gap-1 ${
+              className={`hidden md:flex px-3 py-1 text-xs font-medium rounded-full transition-colors items-center gap-1 ${
                 topTab === "work" ? "bg-[#2f2f2f] text-white shadow-sm" : "text-gray-400 hover:text-gray-200"
               }`}
             >
@@ -2351,7 +2508,7 @@ export default function Home() {
             )}
 
             {!currentUser ? (
-              <button
+              <button type="button"
                 onClick={() => {
                   setAuthMode("login");
                   setShowAuthModal(true);
@@ -2364,7 +2521,7 @@ export default function Home() {
 
             {/* Upgrade Button only for Free Users */}
             {!isProUser && (
-              <button
+              <button type="button"
                 onClick={() => setShowUpgradeModal(true)}
                 className="flex items-center gap-1 sm:gap-1.5 text-[10px] sm:text-xs font-semibold bg-white/10 hover:bg-white/20 text-white px-2.5 py-1 rounded-full transition-all whitespace-nowrap border border-white/10"
               >
@@ -2374,7 +2531,7 @@ export default function Home() {
             )}
 
             {/* Private Mode Switcher (Visible on mobile & desktop between Upgrade & New Chat) */}
-            <button
+            <button type="button"
               onClick={() => {
                 const nextMode = !isPrivateMode;
                 setIsPrivateMode(nextMode);
@@ -2387,12 +2544,18 @@ export default function Home() {
               }`}
               title={isPrivateMode ? "Private mode active (not saving)" : "Public mode (saving)"}
             >
-              {isPrivateMode ? <Lock size={15} className="text-purple-400" /> : <Globe size={15} />}
+              <div className={`w-[18px] h-[18px] rounded-full overflow-hidden flex items-center justify-center transition-all ${
+                isPrivateMode 
+                  ? "bg-purple-500/20 shadow-[0_0_12px_rgba(168,85,247,0.8)] animate-pulse p-0.5" 
+                  : "p-0.5 opacity-60 hover:opacity-100"
+              }`}>
+                <img src="/incognito.png" alt="Incognito" className={`w-full h-full object-contain invert ${isPrivateMode ? "opacity-100" : "opacity-80"}`} />
+              </div>
               <span className="hidden md:inline">{isPrivateMode ? "Private" : "Public"}</span>
             </button>
 
             {/* ChatGPT-style New Chat Icon */}
-            <button
+            <button type="button"
               onClick={handleNewChat}
               className="p-1.5 text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-colors flex items-center justify-center"
               title="New chat"
@@ -2406,7 +2569,7 @@ export default function Home() {
 
 
             {currentUser && (
-              <button
+              <button type="button"
                   onClick={handleSignOut}
                   className="hidden md:flex p-1.5 hover:bg-red-500/10 text-gray-400 hover:text-red-400 rounded-lg transition-colors"
                 title="Log out"
@@ -2421,7 +2584,41 @@ export default function Home() {
         <div className="flex-1 overflow-y-auto px-4 md:px-8 scroll-smooth flex flex-col">
           
           
-          {showLibrary ? (
+          {topTab === "news" ? (
+            <div className="w-full flex-1 pt-4 pb-20 animate-fade-in">
+              <NewsSection />
+            </div>
+          ) : showArtifacts ? (
+            <div className="flex-1 flex flex-col w-full px-4 md:px-8 py-8 animate-fade-in text-white h-full relative">
+              {/* Header */}
+              <div className="absolute top-8 w-full left-0 px-8 flex justify-between items-center z-10 pointer-events-none">
+                <div className="w-[100px]"></div> {/* Spacer */}
+                <h2 className="text-xl md:text-2xl font-semibold pointer-events-auto">Artifacts</h2>
+                <div className="flex items-center gap-3 w-[100px] justify-end pointer-events-auto">
+                  <button type="button" className="p-2 text-gray-400 hover:text-white rounded-md hover:bg-white/10 transition-colors">
+                    <Search size={18} />
+                  </button>
+                  <button type="button" onClick={() => showToast("Artifact creation coming soon")} className="hidden md:flex px-4 py-2 bg-white text-black hover:bg-gray-200 rounded-full text-sm font-medium transition-colors whitespace-nowrap">
+                    New artifact
+                  </button>
+                </div>
+              </div>
+              
+              {/* Empty State */}
+              <div className="flex-1 flex flex-col items-center justify-center text-center max-w-sm mx-auto -mt-10">
+                <div className="w-20 h-20 mb-6 flex items-center justify-center opacity-70">
+                  <Shapes size={64} strokeWidth={1} className="text-white" />
+                </div>
+                <h3 className="text-xl font-medium mb-3">What will you build with artifacts?</h3>
+                <p className="text-sm text-gray-400 mb-6 leading-relaxed">
+                  If you can dream it, you can build it. Take apps, games, templates, and tools from thought to reality.
+                </p>
+                <button type="button" onClick={() => showToast("Artifact creation coming soon")} className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-full text-sm font-medium transition-colors border border-white/10">
+                  New artifact
+                </button>
+              </div>
+            </div>
+          ) : showLibrary ? (
             <div className="flex-1 flex flex-col w-full max-w-4xl mx-auto px-4 py-8 relative animate-fade-in text-white">
               {/* Header */}
               <div className="flex justify-between items-center mb-8 mt-4">
@@ -2435,7 +2632,7 @@ export default function Home() {
                       className="bg-[#2a2a2a] border border-transparent focus:border-white/20 text-white text-sm rounded-full py-1.5 pl-9 pr-4 outline-none transition-colors w-48"
                     />
                   </div>
-                  <button onClick={() => showToast("Upload coming soon")} className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-black hover:bg-gray-200 rounded-full text-sm font-medium transition-colors">
+                  <button type="button" onClick={() => showToast("Upload coming soon")} className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-black hover:bg-gray-200 rounded-full text-sm font-medium transition-colors">
                     New <ChevronRight size={14} className="rotate-90" />
                   </button>
                 </div>
@@ -2444,14 +2641,14 @@ export default function Home() {
               {/* Tabs and Controls */}
               <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-4">
                 <div className="flex items-center gap-2">
-                  <button onClick={() => setLibraryTab("All")} className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${libraryTab === "All" ? "bg-white/20 text-white" : "text-gray-400 hover:text-white"}`}>All</button>
-                  <button onClick={() => setLibraryTab("Images")} className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${libraryTab === "Images" ? "bg-white/20 text-white" : "text-gray-400 hover:text-white"}`}>Images</button>
-                  <button onClick={() => setLibraryTab("Documents")} className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${libraryTab === "Documents" ? "bg-white/20 text-white" : "text-gray-400 hover:text-white"}`}>Documents</button>
+                  <button type="button" onClick={() => setLibraryTab("All")} className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${libraryTab === "All" ? "bg-white/20 text-white" : "text-gray-400 hover:text-white"}`}>All</button>
+                  <button type="button" onClick={() => setLibraryTab("Images")} className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${libraryTab === "Images" ? "bg-white/20 text-white" : "text-gray-400 hover:text-white"}`}>Images</button>
+                  <button type="button" onClick={() => setLibraryTab("Documents")} className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${libraryTab === "Documents" ? "bg-white/20 text-white" : "text-gray-400 hover:text-white"}`}>Documents</button>
                 </div>
                 <div className="flex items-center gap-2 text-gray-400">
-                  <button className="p-1.5 hover:bg-white/10 rounded-md transition-colors"><Layers size={16} /></button>
-                  <button className="p-1.5 hover:bg-white/10 rounded-md transition-colors"><LayoutGrid size={16} /></button>
-                  <button className="p-1.5 hover:bg-white/10 rounded-md transition-colors"><Menu size={16} /></button>
+                  <button type="button" className="p-1.5 hover:bg-white/10 rounded-md transition-colors"><Layers size={16} /></button>
+                  <button type="button" className="p-1.5 hover:bg-white/10 rounded-md transition-colors"><LayoutGrid size={16} /></button>
+                  <button type="button" className="p-1.5 hover:bg-white/10 rounded-md transition-colors"><Menu size={16} /></button>
                 </div>
               </div>
 
@@ -2476,7 +2673,15 @@ export default function Home() {
                   }
 
                   return files.map((file) => (
-                    <div key={file.id} className="group grid grid-cols-12 gap-4 items-center px-4 py-3 hover:bg-white/5 rounded-xl cursor-pointer transition-colors border border-transparent hover:border-white/5" onClick={() => window.open(file.url, "_blank")}>
+                    <div key={file.id} className="group grid grid-cols-12 gap-4 items-center px-4 py-3 hover:bg-white/5 rounded-xl cursor-pointer transition-colors border border-transparent hover:border-white/5"
+                      onClick={() => {
+                        if (file.type === "image") {
+                          downloadImage(file.url, file.name);
+                        } else {
+                          window.open(file.url, "_blank");
+                        }
+                      }}
+                    >
                       <div className="col-span-6 flex items-center gap-3 truncate pr-4 relative">
                         <div className="absolute -left-2 opacity-0 group-hover:opacity-100 transition-opacity">
                           <div className="w-4 h-4 border-2 border-gray-500 rounded flex items-center justify-center bg-[#1e1e1e]" onClick={(e) => e.stopPropagation()}></div>
@@ -2495,9 +2700,16 @@ export default function Home() {
                       </div>
                       <div className="col-span-3 flex items-center justify-between text-xs text-gray-400">
                         <span>{file.sizeStr}</span>
-                        <button className="opacity-0 group-hover:opacity-100 p-1 hover:text-white rounded hover:bg-white/10 transition-all" onClick={(e) => { e.stopPropagation(); showToast("Options menu"); }}>
-                          <MoreHorizontal size={16} />
-                        </button>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                          {file.type === "image" && (
+                            <button type="button" title="Download" className="p-1 hover:text-white rounded hover:bg-white/10 transition-all" onClick={(e) => { e.stopPropagation(); downloadImage(file.url, file.name); }}>
+                              <Download size={14} />
+                            </button>
+                          )}
+                          <button type="button" className="p-1 hover:text-white rounded hover:bg-white/10 transition-all" onClick={(e) => { e.stopPropagation(); showToast("Options menu"); }}>
+                            <MoreHorizontal size={16} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ));
@@ -2510,7 +2722,7 @@ export default function Home() {
               {/* Header */}
               <div className="flex justify-between items-start mb-2">
                 <h2 className="text-3xl font-bold">Scheduled</h2>
-                <button onClick={() => showToast("Active tasks modal coming soon")} className="flex items-center gap-1.5 px-3 py-1.5 bg-[#262626] hover:bg-[#303030] rounded-full text-xs font-medium border border-white/10 transition-colors">
+                <button type="button" onClick={() => showToast("Active tasks modal coming soon")} className="flex items-center gap-1.5 px-3 py-1.5 bg-[#262626] hover:bg-[#303030] rounded-full text-xs font-medium border border-white/10 transition-colors">
                   <Filter size={14} className="text-gray-400" />
                   Active
                 </button>
@@ -2541,10 +2753,10 @@ export default function Home() {
                   className="w-full bg-[#1a1a1a] border border-white/10 text-white rounded-2xl py-4 pl-11 pr-24 outline-none focus:bg-[#202020] focus:border-white/20 transition-all shadow-lg"
                 />
                 <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                  <button className="p-2 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+                  <button type="button" className="p-2 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
                     <Mic size={18} />
                   </button>
-                  <button
+                  <button type="button"
                     onClick={() => {
                       if (scheduledInput.trim()) {
                         setShowScheduled(false); setShowLibrary(false);
@@ -2564,7 +2776,7 @@ export default function Home() {
 
               {/* Recommended Tasks */}
               <div>
-                <button className="flex items-center gap-1 text-sm text-gray-300 font-medium hover:text-white mb-4">
+                <button type="button" className="flex items-center gap-1 text-sm text-gray-300 font-medium hover:text-white mb-4">
                   Recommended
                   <ChevronRight size={14} className="rotate-90" />
                 </button>
@@ -2576,7 +2788,7 @@ export default function Home() {
                     { title: "Concert alerts", subtitle: "Let me know when artists I like announce concerts near me", icon: <Music size={18} className="text-purple-400" />, iconBg: "bg-purple-400/10", prompt: "Schedule a task: Let me know when artists I like announce concerts near me" },
                     { title: "Weekend ideas", subtitle: "Every Thursday, send me ideas for things to do nearby this weekend", icon: <Sparkles size={18} className="text-yellow-400" />, iconBg: "bg-yellow-400/10", prompt: "Schedule a task: Every Thursday, send me ideas for things to do nearby this weekend" },
                   ].map((task, idx) => (
-                    <button
+                    <button type="button"
                       key={idx}
                       onClick={() => {
                         setShowScheduled(false); setShowLibrary(false);
@@ -2618,7 +2830,7 @@ export default function Home() {
                   <div className="mb-2 inline-flex items-center gap-2 bg-[#2a2a2a] p-1.5 pr-3 rounded-xl border border-white/15 text-xs text-gray-200">
                     <img src={attachedImage} alt="Attach" className="w-8 h-8 object-cover rounded-lg" />
                     <span>Image attached</span>
-                    <button
+                    <button type="button"
                       onClick={() => setAttachedImage(null)}
                       className="p-1 hover:text-red-400 rounded transition-colors"
                     >
@@ -2645,7 +2857,7 @@ export default function Home() {
                         const IconComponent = cmd.icon;
                         const isSel = idx === selectedIndex;
                         return (
-                          <button
+                          <button type="button"
                             key={cmd.id}
                             onClick={() => handleSelectCommand(cmd)}
                             className={`items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
@@ -2676,7 +2888,7 @@ export default function Home() {
 
               {/* 3 Action Chips */}
               <div className="w-full flex flex-col sm:flex-row items-stretch sm:items-center gap-2 mt-1">
-                <button
+                <button type="button"
                   onClick={() => setInput("/image ")}
                   className="flex items-center gap-2.5 px-3 py-2 sm:px-4 sm:py-2.5 rounded-full bg-[#262626] hover:bg-[#303030] border border-white/10 text-xs text-gray-300 hover:text-white transition-all shadow-sm flex-1"
                 >
@@ -2684,7 +2896,7 @@ export default function Home() {
                   <span>Create an image</span>
                 </button>
 
-                <button
+                <button type="button"
                   onClick={() => setInput("/coding ")}
                   className="flex items-center gap-2.5 px-3 py-2 sm:px-4 sm:py-2.5 rounded-full bg-[#262626] hover:bg-[#303030] border border-white/10 text-xs text-gray-300 hover:text-white transition-all shadow-sm flex-1"
                 >
@@ -2692,7 +2904,7 @@ export default function Home() {
                   <span>Write or edit</span>
                 </button>
 
-                <button
+                <button type="button"
                   onClick={() => setInput("/search ")}
                   className="flex items-center gap-2.5 px-3 py-2 sm:px-4 sm:py-2.5 rounded-full bg-[#262626] hover:bg-[#303030] border border-white/10 text-xs text-gray-300 hover:text-white transition-all shadow-sm flex-1"
                 >
@@ -2722,21 +2934,21 @@ export default function Home() {
 
                       {/* User message actions */}
                       <div className="opacity-100 md:opacity-0 md:group-hover:opacity-100 flex items-center gap-1.5 mt-1.5 text-gray-400 text-xs transition-opacity pr-2">
-                        <button
+                        <button type="button"
                           onClick={() => handleCopy(msg.id, msg.content)}
                           className="p-1 hover:text-white rounded hover:bg-white/10 transition-colors"
                           title="Copy text"
                         >
                           {copiedId === msg.id ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
                         </button>
-                        <button
+                        <button type="button"
                           onClick={() => setShareContent(msg.content)}
                           className="p-1 hover:text-white rounded hover:bg-white/10 transition-colors"
                           title="Share prompt"
                         >
                           <Share2 size={13} />
                         </button>
-                        <button
+                        <button type="button"
                           onClick={() => {
                             setInput(msg.content);
                             textareaRef.current?.focus();
@@ -2757,7 +2969,7 @@ export default function Home() {
 
                       {/* Action buttons below AI reply */}
                       <div className="flex items-center gap-1 mt-3 text-gray-400 text-xs">
-                        <button
+                        <button type="button"
                           onClick={() => toggleSpeak(msg.id, msg.content)}
                           className={`p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors ${
                             speakingMsgId === msg.id ? "text-emerald-400 bg-white/10" : ""
@@ -2767,7 +2979,7 @@ export default function Home() {
                           {speakingMsgId === msg.id ? <VolumeX size={15} /> : <Volume2 size={15} />}
                         </button>
 
-                        <button
+                        <button type="button"
                           onClick={() => handleCopy(msg.id, msg.content)}
                           className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors"
                           title="Copy response"
@@ -2775,7 +2987,7 @@ export default function Home() {
                           {copiedId === msg.id ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
                         </button>
 
-                        <button
+                        <button type="button"
                           onClick={() => handleRate(msg.id, true)}
                           className={`p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors ${
                             msg.liked === true ? "text-emerald-400 bg-white/10" : ""
@@ -2785,7 +2997,7 @@ export default function Home() {
                           <ThumbsUp size={15} />
                         </button>
 
-                        <button
+                        <button type="button"
                           onClick={() => handleRate(msg.id, false)}
                           className={`p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors ${
                             msg.liked === false ? "text-red-400 bg-white/10" : ""
@@ -2795,7 +3007,7 @@ export default function Home() {
                           <ThumbsDown size={15} />
                         </button>
 
-                        <button
+                        <button type="button"
                           onClick={handleRegenerate}
                           className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors"
                           title="Regenerate response"
@@ -2803,7 +3015,7 @@ export default function Home() {
                           <RotateCcw size={15} />
                         </button>
 
-                        <button
+                        <button type="button"
                             onClick={() => setShareContent(msg.content)}
                             className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors"
                             title="Share"
@@ -2812,7 +3024,7 @@ export default function Home() {
                         </button>
 
                         <div className="relative">
-                            <button
+                            <button type="button"
                               onClick={() => setActiveReplyMenuId(activeReplyMenuId === msg.id ? null : msg.id)}
                               className="p-1.5 rounded-lg hover:bg-white/10 hover:text-white transition-colors"
                               title="More"
@@ -2824,7 +3036,7 @@ export default function Home() {
                                 <div className="px-3 py-2 border-b border-white/10 text-xs text-gray-500 font-medium">
                                   Today, {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                                 </div>
-                                <button
+                                <button type="button"
                                   onClick={() => {
                                     setActiveReplyMenuId(null);
                                     const linksMatch = msg.content.match(/\[([^\]]+)\]\(([^)]+)\)/g);
@@ -2839,14 +3051,14 @@ export default function Home() {
                                   <Book size={14} className="text-gray-400" />
                                   <span>View sources</span>
                                 </button>
-                                <button
+                                <button type="button"
                                   onClick={() => handleBranchChat(msg.id)}
                                   className="flex items-center gap-3 w-full px-3 py-2.5 hover:bg-white/10 transition-colors text-left text-sm"
                                 >
                                   <GitBranch size={14} className="text-gray-400" />
                                   <span>Branch in new chat</span>
                                 </button>
-                                <button
+                                <button type="button"
                                   onClick={() => {
                                     setActiveReplyMenuId(null);
                                     toggleSpeak(msg.id, msg.content);
@@ -2867,14 +3079,63 @@ export default function Home() {
 
               {/* Loading indicator */}
               {isLoading && (
-                <div className="flex items-center gap-2 text-gray-400 text-sm py-2">
-                  <div className="flex gap-1.5 items-center">
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
+                isGeneratingImage ? (
+                  /* ✨ ChatGPT-style image generation animation */
+                  <div className="flex flex-col gap-3 py-2 max-w-sm">
+                    {/* Shimmer card */}
+                    <div className="relative w-72 h-72 rounded-2xl overflow-hidden bg-gradient-to-br from-[#2a2a2a] to-[#1a1a1a] border border-white/10 shadow-2xl">
+                      {/* Animated gradient sweep */}
+                      <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.8s_ease-in-out_infinite] bg-gradient-to-r from-transparent via-white/8 to-transparent" style={{animation: 'shimmer 1.8s ease-in-out infinite'}} />
+                      {/* Pulsing noise overlay */}
+                      <div className="absolute inset-0 opacity-20" style={{
+                        backgroundImage: 'radial-gradient(circle at 20% 30%, #7c3aed44 0%, transparent 50%), radial-gradient(circle at 80% 70%, #2563eb44 0%, transparent 50%), radial-gradient(circle at 50% 50%, #ec489944 0%, transparent 60%)',
+                        animation: 'pulse 2s ease-in-out infinite alternate'
+                      }} />
+                      {/* Center icon */}
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                        <div className="relative">
+                          <div className="w-14 h-14 rounded-2xl bg-white/10 backdrop-blur-sm border border-white/20 flex items-center justify-center" style={{animation: 'pulse 1.5s ease-in-out infinite'}}>
+                            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-white/60">
+                              <rect x="3" y="3" width="18" height="18" rx="2" />
+                              <circle cx="8.5" cy="8.5" r="1.5" />
+                              <polyline points="21,15 16,10 5,21" />
+                            </svg>
+                          </div>
+                          {/* Rotating ring */}
+                          <div className="absolute -inset-2 rounded-3xl border-2 border-purple-500/30 border-t-purple-400" style={{animation: 'spin 2s linear infinite'}} />
+                        </div>
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="text-white/80 text-sm font-medium">Generating image...</span>
+                          {/* Animated dots */}
+                          <div className="flex gap-1">
+                            <div className="w-1.5 h-1.5 bg-purple-400 rounded-full" style={{animation: 'bounce 1s ease-in-out infinite'}} />
+                            <div className="w-1.5 h-1.5 bg-blue-400 rounded-full" style={{animation: 'bounce 1s ease-in-out 0.2s infinite'}} />
+                            <div className="w-1.5 h-1.5 bg-pink-400 rounded-full" style={{animation: 'bounce 1s ease-in-out 0.4s infinite'}} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    {/* Progress bar */}
+                    <div className="w-72 h-1 bg-white/10 rounded-full overflow-hidden">
+                      <div className="h-full bg-gradient-to-r from-purple-500 via-blue-500 to-pink-500 rounded-full" style={{animation: 'progress 3s ease-in-out infinite'}} />
+                    </div>
+                    <style>{`
+                      @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(200%); } }
+                      @keyframes progress { 0% { width: 5%; } 70% { width: 85%; } 100% { width: 95%; } }
+                      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                    `}</style>
                   </div>
-                  <span className="text-xs text-gray-500">globalgeniusai is thinking...</span>
-                </div>
+                ) : (
+                  /* Regular text loading dots */
+                  <div className="flex items-center gap-2 text-gray-400 text-sm py-2">
+                    <div className="flex gap-1.5 items-center">
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
+                    </div>
+                    <span className="text-xs text-gray-500">globalgeniusai is thinking...</span>
+                  </div>
+                )
               )}
 
               <div ref={messagesEndRef} />
@@ -2890,7 +3151,7 @@ export default function Home() {
                 <div className="mb-2 inline-flex items-center gap-2 bg-[#2a2a2a] p-1.5 pr-3 rounded-xl border border-white/15 text-xs text-gray-200">
                   <img src={attachedImage} alt="Attach" className="w-8 h-8 object-cover rounded-lg" />
                   <span>Image attached</span>
-                  <button
+                  <button type="button"
                     onClick={() => setAttachedImage(null)}
                     className="p-1 hover:text-red-400 rounded transition-colors"
                   >
@@ -2910,7 +3171,7 @@ export default function Home() {
                       const IconComponent = cmd.icon;
                       const isSel = idx === selectedIndex;
                       return (
-                        <button
+                        <button type="button"
                           key={cmd.id}
                           onClick={() => handleSelectCommand(cmd)}
                           className={`items-center gap-3 w-full px-3 py-2.5 rounded-xl text-left transition-colors ${
@@ -2950,20 +3211,20 @@ export default function Home() {
         <div className="fixed inset-0 z-[60] bg-black flex flex-col animate-fade-in">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-[#121212]">
-            <button onClick={() => setShowProjectsModal(false)} className="p-2 bg-white/5 rounded-full hover:bg-white/10 text-white transition-colors">
+            <button type="button" onClick={() => setShowProjectsModal(false)} className="p-2 bg-white/5 rounded-full hover:bg-white/10 text-white transition-colors">
               <ChevronRight size={20} className="rotate-180" />
             </button>
             <h2 className="text-lg font-semibold text-white">Projects</h2>
-            <button onClick={() => setShowCreateProject(true)} className="p-2 bg-white/5 rounded-full hover:bg-white/10 text-white transition-colors">
+            <button type="button" onClick={() => setShowCreateProject(true)} className="p-2 bg-white/5 rounded-full hover:bg-white/10 text-white transition-colors">
               <Plus size={20} />
             </button>
           </div>
 
           {/* Tabs */}
           <div className="flex items-center gap-6 px-6 py-4 bg-[#121212] border-b border-white/10 overflow-x-auto hide-scrollbar text-sm">
-            <button className="px-4 py-1.5 bg-white/20 text-white rounded-full font-medium whitespace-nowrap">All</button>
-            <button className="text-gray-400 font-medium hover:text-white transition-colors whitespace-nowrap">Created by you</button>
-            <button className="text-gray-400 font-medium hover:text-white transition-colors whitespace-nowrap">Shared with you</button>
+            <button type="button" className="px-4 py-1.5 bg-white/20 text-white rounded-full font-medium whitespace-nowrap">All</button>
+            <button type="button" className="text-gray-400 font-medium hover:text-white transition-colors whitespace-nowrap">Created by you</button>
+            <button type="button" className="text-gray-400 font-medium hover:text-white transition-colors whitespace-nowrap">Shared with you</button>
           </div>
 
           {/* Body */}
@@ -2987,7 +3248,7 @@ export default function Home() {
               </div>
             ) : (
               <div className="max-w-2xl mx-auto pb-24">
-                <button onClick={() => setSelectedProjectId(null)} className="flex items-center gap-2 text-gray-400 hover:text-white mb-6 text-sm">
+                <button type="button" onClick={() => setSelectedProjectId(null)} className="flex items-center gap-2 text-gray-400 hover:text-white mb-6 text-sm">
                   <ChevronRight size={16} className="rotate-180" />
                   Back to Projects
                 </button>
@@ -3031,12 +3292,12 @@ export default function Home() {
           <div className="w-full max-w-sm bg-[#1e1e1e] border border-white/10 rounded-3xl p-6 shadow-2xl animate-fade-in flex flex-col">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-semibold text-white">Select Project</h2>
-              <button onClick={() => setMoveToChatId(null)} className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
+              <button type="button" onClick={() => setMoveToChatId(null)} className="p-1.5 text-gray-400 hover:text-white rounded-full hover:bg-white/10 transition-colors">
                 <X size={18} />
               </button>
             </div>
             <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
-              <button
+              <button type="button"
                 onClick={async () => {
                   if (currentUser) {
                     const convRef = doc(db, "chats", moveToChatId);
@@ -3052,7 +3313,7 @@ export default function Home() {
                 <span className="text-white text-sm font-medium">Remove from project</span>
               </button>
               {projects.map(proj => (
-                <button
+                <button type="button"
                   key={proj.id}
                   onClick={async () => {
                     if (currentUser) {
@@ -3105,6 +3366,79 @@ export default function Home() {
       )}
 
       </main>
+
+      {/* ================= CANVAS PANEL ================= */}
+      {isCanvasOpen && (
+        <aside className="w-full sm:w-1/2 lg:w-[45%] h-full bg-[#1e1e1e] border-l border-white/5 flex flex-col absolute sm:relative right-0 top-0 z-40 shadow-2xl animate-fade-in sm:animate-none">
+          <div className="h-14 flex items-center justify-between px-4 border-b border-white/5 flex-shrink-0">
+            <div className="flex items-center gap-2 text-orange-400 font-semibold">
+              <PenLine size={16} />
+              <span>Canvas</span>
+            </div>
+            <div className="flex items-center gap-2">
+               <button type="button"
+                 onClick={() => handleCopy("canvas", canvasContent || "")}
+                 className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
+                 title="Copy canvas content"
+               >
+                 <Copy size={16} />
+               </button>
+               <button type="button"
+                 onClick={() => setIsCanvasOpen(false)}
+                 className="p-1.5 hover:bg-white/10 rounded-lg text-gray-400 hover:text-white transition-colors"
+               >
+                 <X size={18} />
+               </button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto p-6 lg:p-10 custom-scrollbar bg-[#1a1a1a]">
+             <div className="prose prose-invert max-w-none prose-p:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent prose-headings:text-gray-100 prose-a:text-orange-400">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    code({ node, inline, className, children, ...props }: any) {
+                      const match = /language-(\w+)/.exec(className || "");
+                      const language = match ? match[1] : "code";
+                      const codeBody = String(children).replace(/\n$/, "");
+                      const blockId = `code-canvas-${Math.random()}`;
+                      if (!inline) {
+                        return (
+                          <div className="my-4 rounded-xl overflow-hidden border border-white/15 bg-[#141414]">
+                            <div className="flex items-center justify-between px-4 py-2 bg-[#212121] text-xs text-gray-400 border-b border-white/10 font-mono">
+                              <span className="font-semibold text-gray-300 uppercase">{language}</span>
+                              <button type="button"
+                                onClick={() => handleCopy(blockId, codeBody)}
+                                className="flex items-center gap-1.5 hover:text-white transition-colors"
+                              >
+                                {copiedId === blockId ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                                <span>{copiedId === blockId ? "Copied" : "Copy"}</span>
+                              </button>
+                            </div>
+                            <SyntaxHighlighter
+                              style={vscDarkPlus}
+                              language={language}
+                              PreTag="div"
+                              className="!my-0 !p-4 !bg-transparent text-sm"
+                              {...props}
+                            >
+                              {codeBody}
+                            </SyntaxHighlighter>
+                          </div>
+                        );
+                      }
+                      return <code className="bg-white/10 px-1.5 py-0.5 rounded text-sm text-pink-300 font-mono" {...props}>{children}</code>;
+                    },
+                    table({ node, ...props }: any) { return <div className="overflow-x-auto my-6 border border-white/10 rounded-lg"><table className="w-full text-sm text-left" {...props} /></div>; },
+                    th({ node, ...props }: any) { return <th className="bg-white/5 px-4 py-3 font-semibold text-gray-200" {...props} />; },
+                    td({ node, ...props }: any) { return <td className="px-4 py-3 border-t border-white/5" {...props} />; }
+                  }}
+                >
+                  {canvasContent || ""}
+                </ReactMarkdown>
+             </div>
+          </div>
+        </aside>
+      )}
     </div>
   );
 }
